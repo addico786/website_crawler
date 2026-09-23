@@ -1,0 +1,35 @@
+# Push a tag like v1.1.0 -> builds the Windows app and publishes it as a GitHub Release.
+# The dashboard's "Check for Updates" button reads the latest Release from this repo.
+name: Release Windows app
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Check tag matches server.VERSION
+        shell: bash
+        run: |
+          version=$(sed -n 's/^VERSION = "\(.*\)".*/\1/p' server.py)
+          [ "v$version" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} != v$version in server.py"; exit 1; }
+
+      - name: Build
+        shell: cmd
+        run: build_exe.bat
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/WebsiteCrawler-windows.zip
+          generate_release_notes: true

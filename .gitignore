@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environments
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Scrapy & Crawler data
+.scrapy/
+jobs/
+output/
+*.log
+
+# Secrets & Environment variables
+.env
+
+# IDE / OS specific
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.pytest_cache/
+.venv-win/
+*.spec
+_update/
+browser_install.log
+
+# Old CLI crawl output (crawl.py --job <name>)
+adnan/
+amazon/

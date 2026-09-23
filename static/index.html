@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Website Crawler Dashboard</title>
+  <meta name="description" content="Visual web crawler dashboard for non-technical users to trigger crawls, view extracted page data, and export results." />
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- Top Navigation Header -->
+    <header class="top-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <i class="fa-solid fa-spider"></i>
+        </div>
+        <div class="brand-text">
+          <h1>Polite Web Crawler</h1>
+          <span class="brand-subtitle">Smart Website Data & Page Extractor</span>
+        </div>
+      </div>
+      
+      <div class="header-actions">
+        <div class="system-status">
+          <span class="status-dot online"></span>
+          <span class="status-text">System Ready</span>
+        </div>
+        <button id="btn-refresh-all" class="btn btn-outline btn-sm">
+          <i class="fa-solid fa-rotate"></i> Refresh
+        </button>
+        <button id="btn-new-crawl-modal" class="btn btn-primary">
+          <i class="fa-solid fa-plus"></i> New Crawl
+        </button>
+      </div>
+    </header>
+
+    <!-- Global Stats Metric Cards -->
+    <section class="stats-overview-grid" id="stats-overview">
+      <div class="metric-card">
+        <div class="metric-icon purple">
+          <i class="fa-solid fa-globe"></i>
+        </div>
+        <div class="metric-info">
+          <span class="metric-label">Total Jobs Run</span>
+          <h2 class="metric-value" id="stat-total-jobs">0</h2>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-icon blue">
+          <i class="fa-solid fa-spinner fa-spin-pulse" id="active-jobs-icon" style="display:none;"></i>
+          <i class="fa-solid fa-play" id="active-jobs-idle-icon"></i>
+        </div>
+        <div class="metric-info">
+          <span class="metric-label">Active Crawls</span>
+          <h2 class="metric-value" id="stat-active-jobs">0</h2>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-icon green">
+          <i class="fa-solid fa-file-lines"></i>
+        </div>
+        <div class="metric-info">
+          <span class="metric-label">Pages Extracted</span>
+          <h2 class="metric-value" id="stat-total-pages">0</h2>
+        </div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-icon amber">
+          <i class="fa-solid fa-link"></i>
+        </div>
+        <div class="metric-info">
+          <span class="metric-label">Links Found</span>
+          <h2 class="metric-value" id="stat-total-links">0</h2>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Content Layout (Sidebar Jobs + Detail View) -->
+    <main class="main-layout">
+
+      <!-- Left Sidebar: Crawl Jobs History -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h3><i class="fa-solid fa-list-check"></i> Crawl Jobs</h3>
+          <span class="job-count-badge" id="jobs-count-tag">0</span>
+        </div>
+        <div class="jobs-list" id="jobs-list-container">
+          <div class="empty-jobs">
+            <i class="fa-solid fa-inbox"></i>
+            <p>No crawl jobs found.<br>Click "New Crawl" to start!</p>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Right Main Workspace -->
+      <section class="workspace">
+        
+        <!-- Active Job Banner / Status Card -->
+        <div class="job-header-card" id="job-header-card" style="display: none;">
+          <div class="job-meta-top">
+            <div class="job-title-group">
+              <span class="job-status-pill" id="current-job-status">IDLE</span>
+              <span class="job-js-pill" id="current-job-js-pill" style="display: none;"><i class="fa-brands fa-js"></i> JS Rendered</span>
+              <h2 id="current-job-url">https://example.com</h2>
+            </div>
+            <div class="job-control-buttons">
+              <button id="btn-toggle-log" class="btn btn-outline btn-sm">
+                <i class="fa-solid fa-terminal"></i> Live Console
+              </button>
+              <button id="btn-stop-job" class="btn btn-danger btn-sm" style="display: none;">
+                <i class="fa-solid fa-square"></i> Stop Crawl
+              </button>
+              <button id="btn-delete-job" class="btn btn-danger-outline btn-sm" title="Permanently delete this crawl job and its data">
+                <i class="fa-solid fa-trash"></i> Delete Job
+              </button>
+            </div>
+          </div>
+
+          <div class="job-stats-bar">
+            <div class="job-stat-item">
+              <span class="stat-name">Pages Saved</span>
+              <span class="stat-val" id="job-stat-pages">0</span>
+            </div>
+            <div class="job-stat-item">
+              <span class="stat-name">Total Words</span>
+              <span class="stat-val" id="job-stat-words">0</span>
+            </div>
+            <div class="job-stat-item">
+              <span class="stat-name">Total Links</span>
+              <span class="stat-val" id="job-stat-links">0</span>
+            </div>
+            <div class="job-stat-item">
+              <span class="stat-name">Requests Sent</span>
+              <span class="stat-val" id="job-stat-requests">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Log Console Drawer -->
+        <div class="console-drawer" id="console-drawer" style="display: none;">
+          <div class="console-header">
+            <span><i class="fa-solid fa-terminal"></i> Real-Time Scrapy Logs</span>
+            <button id="btn-close-console" class="btn-icon"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <pre class="console-output" id="console-output">Initializing log stream...</pre>
+        </div>
+
+        <!-- Results Explorer & Data Table -->
+        <div class="results-card" id="results-card">
+          <div class="results-toolbar">
+            <div class="search-box">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="input-search" placeholder="Search by URL, page title, heading or text content..." />
+            </div>
+
+            <div class="filter-group">
+              <select id="select-status-filter" class="select-input">
+                <option value="">All HTTP Statuses</option>
+                <option value="200">200 OK</option>
+                <option value="404">404 Not Found</option>
+                <option value="500">500 Server Error</option>
+              </select>
+
+              <div class="export-dropdown">
+                <button class="btn btn-secondary btn-sm" id="btn-export-menu">
+                  <i class="fa-solid fa-download"></i> Export Data <i class="fa-solid fa-chevron-down"></i>
+                </button>
+                <div class="dropdown-content" id="export-dropdown-content">
+                  <a href="#" id="export-csv"><i class="fa-solid fa-file-csv"></i> Download CSV</a>
+                  <a href="#" id="export-json"><i class="fa-solid fa-code"></i> Download JSON</a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Data Table -->
+          <div class="table-container">
+            <table class="data-table" id="results-table">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Page Title</th>
+                  <th>URL</th>
+                  <th>Word Count</th>
+                  <th>Links</th>
+                  <th>Crawled At</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="table-body">
+                <tr>
+                  <td colspan="7" class="text-center py-5">Select a crawl job from the left sidebar to explore extracted web data.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Pagination Footer -->
+          <div class="pagination-footer">
+            <span class="pagination-info" id="pagination-info">Showing 0 - 0 of 0 pages</span>
+            <div class="pagination-controls">
+              <button id="btn-prev-page" class="btn btn-outline btn-sm" disabled><i class="fa-solid fa-chevron-left"></i> Previous</button>
+              <span id="current-page-label">Page 1 of 1</span>
+              <button id="btn-next-page" class="btn btn-outline btn-sm" disabled>Next <i class="fa-solid fa-chevron-right"></i></button>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <span>Version <span id="app-version">…</span> &middot; Developed by Adnan</span>
+      <button id="btn-check-update" class="btn btn-outline btn-sm">
+        <i class="fa-solid fa-cloud-arrow-down"></i> Check for Updates
+      </button>
+    </footer>
+  </div>
+
+  <!-- New Crawl Setup Modal -->
+  <div class="modal-backdrop" id="crawl-modal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-rocket"></i> Start New Website Crawl</h2>
+        <button id="btn-close-modal" class="btn-icon"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      
+      <form id="form-new-crawl">
+        <div class="form-group">
+          <label for="input-target-url">Website Seed URL <span class="required">*</span></label>
+          <div class="input-with-icon">
+            <i class="fa-solid fa-globe"></i>
+            <input type="url" id="input-target-url" placeholder="https://example.com" required />
+          </div>
+          <small class="form-help">The main website domain or starting page to crawl.</small>
+        </div>
+
+        <div class="form-group">
+          <label>Choose Speed & Coverage Preset</label>
+          <div class="preset-cards">
+            <div class="preset-card active" data-preset="quick">
+              <div class="preset-badge">⚡ Quick</div>
+              <h3>Quick Crawl</h3>
+              <p>Max 100 pages, 5 min limit. Perfect for testing and fast scans.</p>
+            </div>
+
+            <div class="preset-card" data-preset="deep">
+              <div class="preset-badge">🔍 Deep</div>
+              <h3>Deep Crawl</h3>
+              <p>Max 1,000 pages, 60 min limit. Ideal for complete site analysis.</p>
+            </div>
+
+            <div class="preset-card" data-preset="custom">
+              <div class="preset-badge">⚙️ Custom</div>
+              <h3>Custom</h3>
+              <p>Configure exact page limits, depth, delays, and sitemap settings.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="input-job-name">Custom Job Name (Optional)</label>
+          <input type="text" id="input-job-name" placeholder="e.g. example_site_september" />
+        </div>
+
+        <div class="form-group">
+          <label class="toggle-card-label" for="check-render-js">
+            <div class="toggle-card-checkbox">
+              <input type="checkbox" id="check-render-js" />
+            </div>
+            <div class="toggle-card-body">
+              <div class="toggle-card-header">
+                <span class="toggle-card-title">
+                  <i class="fa-brands fa-js" style="color: #f59e0b;"></i> Enable JavaScript Rendering (Playwright)
+                </span>
+                <span class="badge-tag">Dynamic / SPA</span>
+              </div>
+              <p class="toggle-card-desc">
+                Renders client-side JavaScript using headless Chromium. Recommended for React, Vue, Angular, Next.js single-page apps and dynamically loaded content. Standard HTTP is faster for plain static websites.
+              </p>
+            </div>
+          </label>
+        </div>
+
+        <!-- Custom Collapsible Settings -->
+        <div class="custom-settings-panel" id="custom-settings-panel" style="display: none;">
+          <h4><i class="fa-solid fa-sliders"></i> Advanced Crawl Parameters</h4>
+          
+          <div class="form-row">
+            <div class="form-group col">
+              <label for="input-max-pages">Max Pages Limit</label>
+              <input type="number" id="input-max-pages" value="100" min="1" max="50000" />
+            </div>
+
+            <div class="form-group col">
+              <label for="input-max-depth">Max Depth</label>
+              <input type="number" id="input-max-depth" value="3" min="1" max="50" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col">
+              <label for="input-minutes">Time Limit (Minutes)</label>
+              <input type="number" id="input-minutes" value="5" min="0" step="0.5" />
+            </div>
+
+            <div class="form-group col">
+              <label for="input-delay">Delay Between Pages (Secs)</label>
+              <input type="number" id="input-delay" value="1.0" min="0" step="0.5" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="check-sitemap" checked />
+              Automatically parse /sitemap.xml for discovered URLs
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" id="btn-cancel-modal" class="btn btn-outline">Cancel</button>
+          <button type="submit" class="btn btn-primary btn-lg">
+            <i class="fa-solid fa-play"></i> Start Crawl Now
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Page Item Detail Modal Drawer -->
+  <div class="modal-backdrop" id="detail-modal" style="display: none;">
+    <div class="modal-content modal-lg">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-file-lines"></i> Page Data Details</h2>
+        <button id="btn-close-detail" class="btn-icon"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="detail-modal-body">
+        <div class="detail-group">
+          <label>Page Title</label>
+          <div class="detail-value highlight" id="detail-title">N/A</div>
+        </div>
+
+        <div class="detail-group">
+          <label>URL</label>
+          <div class="detail-value"><a id="detail-url" href="#" target="_blank" rel="noopener">N/A</a></div>
+        </div>
+        <div class="detail-group">
+          <label>Found On (page linking here)</label>
+          <div class="detail-value"><a id="detail-found-on" href="#" target="_blank" rel="noopener">N/A</a></div>
+        </div>
+
+        <div class="detail-row">
+          <div class="detail-group col">
+            <label>HTTP Status</label>
+            <div class="detail-value" id="detail-status">200</div>
+          </div>
+          <div class="detail-group col">
+            <label>Word Count</label>
+            <div class="detail-value" id="detail-words">0</div>
+          </div>
+          <div class="detail-group col">
+            <label>Links Extracted</label>
+            <div class="detail-value" id="detail-links">0</div>
+          </div>
+        </div>
+
+        <div class="detail-group">
+          <label>Meta Description</label>
+          <div class="detail-value text-muted" id="detail-desc">None</div>
+        </div>
+
+        <div class="detail-group">
+          <label>Headings (H1 / H2)</label>
+          <ul class="headings-list" id="detail-headings"></ul>
+        </div>
+
+        <div class="detail-group">
+          <label>Extracted Clean Text</label>
+          <div class="text-box" id="detail-text">None</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete Confirmation Modal -->
+  <div class="modal-backdrop" id="modal-confirm-delete" style="display: none;">
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2 style="color: #f87171;"><i class="fa-solid fa-triangle-exclamation"></i> Delete Crawl Job</h2>
+        <button id="btn-cancel-delete-x" class="btn-icon"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body" style="padding: 1.25rem 0;">
+        <p style="color: var(--text-main); font-size: 0.95rem; line-height: 1.5; margin: 0;">
+          Are you sure you want to permanently delete job <strong id="delete-job-target-name" style="color: #f87171; word-break: break-all;"></strong>?
+        </p>
+        <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.65rem; line-height: 1.4;">
+          This will immediately terminate any running crawl processes and permanently erase all saved pages, logs, and metadata. This action cannot be undone.
+        </p>
+      </div>
+      <div class="modal-footer" style="padding-top: 0.75rem;">
+        <button type="button" id="btn-cancel-delete" class="btn btn-outline">Cancel</button>
+        <button type="button" id="btn-confirm-delete-action" class="btn btn-danger">
+          <i class="fa-solid fa-trash"></i> Delete Permanently
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast-notification" style="display: none;"></div>
+
+  <!-- JS Logic -->
+  <script src="/app.js"></script>
+</body>
+</html>
