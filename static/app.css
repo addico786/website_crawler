@@ -887,6 +887,10 @@ form input[type="text"], form input[type="number"] {
   padding-left: 0.85rem;
 }
 
+form .input-with-icon input {
+  padding-left: 2.3rem; /* room for the icon */
+}
+
 .form-help {
   font-size: 0.75rem;
   color: var(--text-dim);

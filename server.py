@@ -29,7 +29,7 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-VERSION = "1.1.0"  # Bump before tagging a release; the tag must be v<VERSION>.
+VERSION = "1.1.1"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
 UPDATE_URL = os.environ.get("CRAWLER_UPDATE_URL", f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
