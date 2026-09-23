@@ -29,7 +29,7 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-VERSION = "1.0.0"  # Bump before tagging a release; the tag must be v<VERSION>.
+VERSION = "1.1.0"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
 UPDATE_URL = os.environ.get("CRAWLER_UPDATE_URL", f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
@@ -40,8 +40,12 @@ FROZEN = getattr(sys, "frozen", False)
 BASE_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).parent.resolve()
 JOBS_DIR = BASE_DIR / "jobs"
 STATIC_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR)) / "static"
-# The .exe re-launches itself with --crawl (see app.py); from source we run crawl.py.
-CRAWL_CMD = [sys.executable, "--crawl"] if FROZEN else [sys.executable, str(BASE_DIR / "crawl.py")]
+# The window app has no console. Crawls run in its console twin, WebsiteCrawlerWorker.exe
+# (see app.py / WebsiteCrawler.spec), started with NO_WINDOW so the node/Chromium processes
+# it launches share that hidden console instead of each popping up a console window.
+WORKER_EXE = BASE_DIR / "WebsiteCrawlerWorker.exe"
+CRAWL_CMD = [str(WORKER_EXE), "--crawl"] if FROZEN else [sys.executable, str(BASE_DIR / "crawl.py")]
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -125,6 +129,7 @@ def kill_process_tree(pid: int):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=5,
+                creationflags=NO_WINDOW,
             )
         else:
             try:
@@ -185,7 +190,11 @@ def is_job_running(job_id: str) -> bool:
                 if pid and pid_exists(pid):
                     return True
                 else:
-                    data["status"] = "failed" if exit_code else "completed"
+                    # Scrapy exits 0 even when the site was unreachable (DNS, TLS, wrong
+                    # http/https) or robots.txt blocked everything: no pages means failed.
+                    results = get_job_path(job_id) / "results.jsonl"
+                    saved_nothing = not results.exists() or results.stat().st_size == 0
+                    data["status"] = "failed" if exit_code or saved_nothing else "completed"
                     pid_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
             pass
@@ -266,7 +275,7 @@ def start_crawl_job(req: StartJobRequest):
             stdout=log_file,
             stderr=subprocess.STDOUT,
             cwd=str(BASE_DIR),
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | NO_WINDOW) if sys.platform == "win32" else 0,
             # Own process group, so killpg() on stop doesn't take the server down with it.
             start_new_session=sys.platform != "win32",
         )
@@ -687,6 +696,12 @@ def get_global_stats():
     }
 
 
+def stop_all_crawls():
+    for item in JOBS_DIR.iterdir():
+        if item.is_dir() and is_job_running(item.name):
+            stop_crawl_job(item.name)
+
+
 def parse_version(tag: str) -> tuple:
     return tuple(int(part) for part in re.findall(r"\d+", tag)[:3])
 
@@ -764,7 +779,7 @@ def install_update():
     # A running .exe can't overwrite itself: hand off to a script that waits for this
     # process to exit, swaps the files (jobs/ is left alone), and starts the new version.
     # Anything else running from the app folder (the background Chromium installer and its
-    # node.exe) would lock _internal, so it is stopped too. (`timeout` needs a console; none here.)
+    # node.exe) would lock _internal, so it is stopped too. (`timeout` fails without an interactive console.)
     app_dir = str(BASE_DIR).replace("'", "''") + "\\"  # quoted for PowerShell
     script = staging / "apply_update.bat"
     script.write_text(
@@ -772,13 +787,13 @@ def install_update():
         f'powershell -NoProfile -Command "Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue; '
         f"Get-Process | Where-Object {{ $_.Path -and $_.Path.StartsWith('{app_dir}', 'OrdinalIgnoreCase') }} | Stop-Process -Force; Start-Sleep 1\"\r\n"
         f'robocopy "{new_dir / "_internal"}" "{BASE_DIR / "_internal"}" /MIR /R:5 /W:1 >nul\r\n'
-        f'copy /y "{new_dir / exe.name}" "{exe}" >nul\r\n'
-        f'start "" "{exe}" --no-browser\r\n',
+        f'copy /y "{new_dir}\\*.exe" "{BASE_DIR}" >nul\r\n'
+        f'start "" "{exe}"\r\n',
         encoding="utf-8",
     )
     subprocess.Popen(
         ["cmd", "/c", str(script)],
-        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        creationflags=NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
         close_fds=True,
     )
     threading.Timer(1.0, os._exit, [0]).start()  # let this response reach the browser first

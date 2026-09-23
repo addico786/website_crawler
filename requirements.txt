@@ -5,3 +5,4 @@ pydantic>=2.0.0
 httpx>=0.24.0
 pytest>=7.0.0
 scrapy-playwright>=0.0.40
+pywebview>=5.0; sys_platform == "win32"

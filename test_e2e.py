@@ -246,3 +246,15 @@ def test_js_rendering_crawl(mock_server):
     dynamic_page = next((item for item in items if "dynamic.html" in item["url"]), None)
     assert dynamic_page is not None
     assert "DYNAMIC_JS_LOADED_SUCCESS" in dynamic_page["text"]
+
+
+def test_unreachable_site_is_failed_not_completed():
+    job_name = f"e2e_unreachable_{int(time.time())}"
+    res = client.post("/api/jobs/start", json={"url": "http://127.0.0.1:1/", "job_name": job_name, "delay": 0.1, "use_sitemap": False})
+    assert res.status_code == 200
+    for _ in range(120):
+        time.sleep(0.5)
+        status = client.get(f"/api/jobs/{job_name}").json()["status"]
+        if status != "running":
+            break
+    assert status == "failed"

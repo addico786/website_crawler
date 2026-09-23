@@ -44,7 +44,6 @@ output/
 Thumbs.db
 .pytest_cache/
 .venv-win/
-*.spec
 _update/
 browser_install.log
 

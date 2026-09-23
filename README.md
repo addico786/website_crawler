@@ -28,7 +28,7 @@ A powerful, polite, and user-friendly web crawler and data extractor featuring a
 ### Option A: Windows App (no Python needed)
 1. Download `WebsiteCrawler-windows.zip` from the latest [GitHub Release](https://github.com/addico786/website_crawler/releases/latest).
 2. Unzip it anywhere you can write to (e.g. Desktop or Documents — not `Program Files`).
-3. Double-click **`WebsiteCrawler.exe`**. The dashboard opens in your browser; keep the black window open while you use it.
+3. Double-click **`WebsiteCrawler.exe`**. The dashboard opens in its own window (Edge WebView2, built into Windows 10/11). Closing the window quits the app and stops any running crawls.
 
 Your crawl data is stored in the `jobs` folder next to the `.exe`. The first launch downloads Chromium (~150 MB) in the background for "Render JavaScript" crawls.
 
@@ -99,7 +99,7 @@ The app is packaged with [PyInstaller](https://pyinstaller.org/) (`--onedir`). P
 ```bat
 build_exe.bat
 ```
-This creates `dist\WebsiteCrawler\WebsiteCrawler.exe` and `dist\WebsiteCrawler-windows.zip`.
+This creates `dist\WebsiteCrawler\WebsiteCrawler.exe` and `dist\WebsiteCrawler-windows.zip`. The build is defined in `WebsiteCrawler.spec`: the window app plus `WebsiteCrawlerWorker.exe`, a console twin that runs crawls hidden so no console windows pop up.
 
 To publish an update that users receive through **Check for Updates**:
 1. Bump `VERSION` in `server.py` (e.g. `1.1.0`) and commit.
@@ -115,7 +115,7 @@ The updater reads `https://api.github.com/repos/<UPDATE_REPO>/releases/latest` (
 ```text
 website_crawler/
 ├── server.py             # FastAPI backend (REST API, process runner, SSE log stream, updates)
-├── app.py                # Entry point of the packaged Windows .exe
+├── app.py                # Entry point of the Windows app (own window via pywebview)
 ├── crawl.py              # CLI launcher for Scrapy crawler
 ├── crawler.sh            # Interactive CLI launcher
 ├── polite_crawler/       # Scrapy spider, settings, and JSONL export pipelines
@@ -129,6 +129,7 @@ website_crawler/
 ├── start_dashboard.bat   # 1-Click Windows launcher script
 ├── start_dashboard.sh    # 1-Click Linux/WSL launcher script
 ├── build_exe.bat         # Builds the Windows app with PyInstaller
+├── WebsiteCrawler.spec   # PyInstaller build: window app + hidden crawl worker
 ├── .github/workflows/    # Release workflow: tag v* -> Windows build -> GitHub Release
 ├── test_smoke.py         # Automated smoke & API unit tests
 ├── test_e2e.py           # End-to-end crawl tests against a local mock site
