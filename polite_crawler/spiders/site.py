@@ -165,6 +165,18 @@ class SiteSpider(scrapy.Spider):
             return "SAME_RESPONSE"
         return None
 
+    def canonical_to_home(self, rows):
+        """How many saved pages (200, not the home page) name the home page as their canonical; 0 unless
+        at least 3 do and they are at least half of the pages: a fault of the site, not a few odd pages."""
+        def is_home(url):
+            parts = urlsplit(page_key(url))
+            return parts.path == "/" and not parts.query and self.in_scope(url)
+        count = sum(
+            1 for row in rows
+            if row.get("status") == 200 and row.get("canonical_url") and not is_home(row["url"]) and is_home(row["canonical_url"])
+        )
+        return count if count >= 3 and count * 2 >= len(rows) else 0
+
     def site_state(self):
         return {
             "same_page_check": self.site_check,

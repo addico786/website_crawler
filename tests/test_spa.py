@@ -139,6 +139,9 @@ def test_without_a_browser_every_address_gives_the_home_page(spa_site, crawl, tm
     assert "This site answers every address with the same page (a single-page app)." in log
     assert "Render JavaScript is not available; pages will look the same. Install it from the dashboard." in log
     assert result["result"]["suspicious"] == 4 and "4 suspicious (same page for different addresses)" in log
+    # Every page names / as its canonical (the app never changes it): a fault of the site, reported.
+    assert result["site_notes"] == ["same_page_for_every_address", "canonical_to_home"]
+    assert "3 pages name the home page as their canonical (a site problem)" in log
 
 
 def test_the_crawl_switches_to_rendering_and_a_resume_keeps_it(spa_site, crawl, tmp_path):
@@ -157,6 +160,9 @@ def test_the_crawl_switches_to_rendering_and_a_resume_keeps_it(spa_site, crawl, 
     assert first["render_js"] is True and first["render_js_switched"] is True
     log = (job / "job.log").read_text(encoding="utf-8")
     assert "Switched to Render JavaScript." in log and "not available" not in log
+    # Rendered, the pages still name / as their canonical: the app never updates it.
+    assert first["site_notes"] == ["same_page_for_every_address", "canonical_to_home"]
+    assert "4 pages name the home page as their canonical (a site problem)" in log
     assert len(check_requests(spa_site)) == 1
 
     # Resumed without --render-js: no second check and no second switch, still rendering, nothing saved twice.
@@ -266,3 +272,21 @@ def test_the_dashboard_says_to_turn_on_rendering():
     assert "This site sends the same page for every address. Turn on Render JavaScript." in page
     script = (BASE_DIR / "static" / "app.js").read_text(encoding="utf-8")
     assert 'notes.includes("same_page_for_every_address") && !summary.render_js' in script
+
+
+def test_canonical_to_home_needs_three_pages_and_half_of_them(tmp_path):
+    spider = SiteSpider(start_url="https://www.example.com/", job_dir=str(tmp_path))
+
+    def rows(to_home, others, status=200):
+        home = [{"url": "https://www.example.com/", "status": 200, "canonical_url": "https://www.example.com/"}]
+        return home + [
+            {"url": f"https://www.example.com/p{n}", "status": status, "canonical_url": "https://example.com/index.html"}
+            for n in range(to_home)
+        ] + [{"url": f"https://www.example.com/o{n}", "status": 200, "canonical_url": f"https://www.example.com/o{n}"} for n in range(others)]
+
+    assert spider.canonical_to_home(rows(3, 2)) == 3  # 3 of 6 pages
+    assert spider.canonical_to_home(rows(2, 0)) == 0  # fewer than 3
+    assert spider.canonical_to_home(rows(3, 4)) == 0  # under half of 8
+    assert spider.canonical_to_home(rows(3, 0, status=404)) == 0  # error pages do not count
+    offsite = [{"url": f"https://www.example.com/p{n}", "status": 200, "canonical_url": "https://other.example/"} for n in range(4)]
+    assert spider.canonical_to_home(offsite) == 0  # another site's home page is not this one's

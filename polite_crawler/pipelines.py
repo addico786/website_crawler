@@ -82,6 +82,11 @@ class JobOutputPipeline:
             if key.startswith("downloader/response_status_count/")
         }
         traps = getattr(spider, "traps", None)
+        site_state = spider.site_state() if hasattr(spider, "site_state") else {}
+        home_canonicals = spider.canonical_to_home(rows) if hasattr(spider, "canonical_to_home") else 0
+        if home_canonicals:  # search engines may fold these pages into the home page
+            logger.warning("%d pages name the home page as their canonical (a site problem)", home_canonicals)
+            site_state["site_notes"].append("canonical_to_home")
         # What the owner sees: the job's pages and how much redundancy was marked or removed.
         result = {
             "pages": len(rows),
@@ -113,7 +118,7 @@ class JobOutputPipeline:
             "skipped": dict(traps.skipped) if traps else {},
             "suspected_traps": traps.suspected() if traps else [],
             # The made-up address checked first, what it says about the site, and whether pages were rendered.
-            **(spider.site_state() if hasattr(spider, "site_state") else {}),
+            **site_state,
             "results_file": "results.jsonl",
         }
         write_json(self.job_dir / "summary.json", summary)
