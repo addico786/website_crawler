@@ -21,15 +21,22 @@ def normalise(block):
     return " ".join(block.split())
 
 
+def is_table_row(block):
+    return block.startswith("|")
+
+
 def find_boilerplate(texts):
-    """(blocks, pages): the blocks found on >= 50% of the texts that have any (min 5), and how many had text."""
+    """(blocks, pages): the blocks found on >= 50% of the texts that have any (min 5), and how many had text.
+
+    Table rows are never boilerplate: they are a page's data, even when many pages share a value
+    (a shop's "| Tax | £0.00 |" on every product)."""
     counts = Counter()
     pages = 0
     for text in texts:
         blocks = {normalise(line) for line in (text or "").splitlines()} - {""}
         if blocks:
             pages += 1
-            counts.update(blocks)
+            counts.update(block for block in blocks if not is_table_row(block))
     needed = max(MIN_PAGES, math.ceil(pages * SHARE))
     return sorted(block for block, count in counts.items() if count >= needed), pages
 

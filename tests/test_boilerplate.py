@@ -22,6 +22,9 @@ def test_find_boilerplate_needs_half_the_pages_and_at_least_five():
     # Spacing does not make a block different; each page counts a block once.
     blocks, _ = find_boilerplate([f"  {BANNER}  \n{BANNER}\nx{n}" for n in range(5)])
     assert blocks == [BANNER]
+    # Table rows are page data, even when every product shares them (books.toscrape.com).
+    products = [f"Book {n}\n| UPC | {n:04x} |\n|---|---|\n| Tax | £0.00 |\n{BANNER}" for n in range(6)]
+    assert find_boilerplate(products) == ([BANNER], 6)
 
 
 def test_boilerplate_file_round_trip(tmp_path):
