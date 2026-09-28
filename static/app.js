@@ -289,21 +289,30 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function fetchJobResults() {
-    if (!currentJobId) return;
+  // quiet = the 4-second refresh of a running job: no loading orb, no
+  // overlapping requests, and the reader's scroll and focus are kept.
+  let resultsSeq = 0;
+  let resultsBusy = false;
+  async function fetchJobResults(quiet = false) {
+    if (!currentJobId || (quiet && resultsBusy)) return;
+    const seq = ++resultsSeq;
+    resultsBusy = true;
 
     const search = inputSearch.value.trim();
     const status = selectStatusFilter.value;
     const url = `/api/jobs/${encodeURIComponent(currentJobId)}/results?page=${currentPage}&limit=${currentLimit}&search=${encodeURIComponent(search)}${status ? '&status_code=' + status : ''}`;
     // Show an orb only if loading is slow (big jobs), so quick loads do not flash.
-    const loadingTimer = setTimeout(() => {
+    const loadingTimer = quiet ? null : setTimeout(() => {
       tableBody.innerHTML = `<tr><td colspan="7" class="text-center py-5"><span class="table-loading">${orbHtml("breathing", 32)}Loading pages…</span></td></tr>`;
     }, 600);
 
     try {
       const res = await fetch(url);
       const data = await res.json();
+      if (seq !== resultsSeq) return; // a newer request (search, filter, page) owns the table
+      const restore = quiet ? keepTableState() : null;
       renderResultsTable(data.items || []);
+      if (restore) restore();
 
       totalPages = data.total_pages || 1;
       const startCount = data.total > 0 ? (currentPage - 1) * currentLimit + 1 : 0;
@@ -318,14 +327,29 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error("Error fetching results:", err);
     } finally {
       clearTimeout(loadingTimer);
+      if (seq === resultsSeq) resultsBusy = false;
     }
+  }
+
+  function keepTableState() {
+    const box = document.querySelector(".table-container");
+    const x = window.scrollX, y = window.scrollY, left = box ? box.scrollLeft : 0;
+    const el = tableBody.contains(document.activeElement) ? document.activeElement : null;
+    const row = el ? [...tableBody.rows].indexOf(el.closest("tr")) : -1;
+    const part = el && el.classList.contains("url-link") ? ".url-link" : ".btn-view-detail";
+    return () => {
+      if (box) box.scrollLeft = left;
+      if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+      const target = row >= 0 && tableBody.rows[row] ? tableBody.rows[row].querySelector(part) : null;
+      if (target) target.focus({ preventScroll: true });
+    };
   }
 
   function renderResultsTable(items) {
     if (items.length === 0) {
       tableBody.innerHTML = `
         <tr>
-          <td colspan="7" class="text-center py-5">No pages found for this job.</td>
+          <td colspan="7" class="text-center py-5">${currentJobStatus.dataset.status === "running" ? "No pages saved yet. This table updates while the crawl runs." : "No pages found for this job."}</td>
         </tr>`;
       return;
     }
@@ -773,15 +797,21 @@ document.addEventListener("DOMContentLoaded", () => {
   fetchOverviewStats();
   fetchJobsList();
 
+  let liveResultsJob = null;
   autoRefreshInterval = setInterval(() => {
     fetchOverviewStats();
     fetchJobsList();
     if (currentJobId) {
       // Lightly refresh job detail
+      const polledJob = currentJobId;
       fetch(`/api/jobs/${currentJobId}`)
         .then((res) => res.json())
         .then((data) => {
+          if (polledJob !== currentJobId) return; // another job was selected meanwhile
           renderCurrentStatus(data.status);
+          // Refresh the results while the job runs, and once more after it stops.
+          if (data.status === "running" || liveResultsJob === polledJob) fetchJobResults(true);
+          liveResultsJob = data.status === "running" ? polledJob : null;
           jobStatPages.textContent = data.pages_saved || 0;
           jobStatWords.textContent = (data.total_words || 0).toLocaleString();
           jobStatLinks.textContent = (data.total_links || 0).toLocaleString();
