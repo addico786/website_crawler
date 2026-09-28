@@ -8,7 +8,8 @@ from polite_crawler.pipelines import JobOutputPipeline
 from polite_crawler.spiders.site import SiteSpider
 from server import app, sanitize_job_name, JOBS_DIR
 
-client = TestClient(app)
+# Address the dashboard as the browser does (http://127.0.0.1:<port>), not as "testserver".
+client = TestClient(app, base_url="http://127.0.0.1:8000")
 
 
 def test_spider_scope():

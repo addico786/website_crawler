@@ -14,7 +14,8 @@ import pytest
 from fastapi.testclient import TestClient
 from server import app, JOBS_DIR
 
-client = TestClient(app)
+# Address the dashboard as the browser does (http://127.0.0.1:<port>), not as "testserver".
+client = TestClient(app, base_url="http://127.0.0.1:8000")
 
 # Local Mock Server for Testing Crawls
 class MockHTMLHandler(SimpleHTTPRequestHandler):
