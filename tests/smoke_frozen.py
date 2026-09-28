@@ -49,9 +49,11 @@ def smoke_crawl(job):
     results = job / "results.jsonl"
     rows = [json.loads(line) for line in results.read_text(encoding="utf-8").splitlines() if line.strip()] if results.exists() else []
     for row in rows:
-        print(f"  {row['status']} {row['url']} words={row.get('word_count')}")
+        print(f"  {row['status']} {row['url']} words={row.get('word_count')} text_source={row.get('text_source')}")
     if len(rows) < 4:
         fail(f"only {len(rows)} pages saved", log)
+    if not any(row.get("text_source") == "trafilatura" for row in rows):
+        fail("no page's main text came from trafilatura (its data files may be missing from the build)", log)
     print(f"Crawl OK: {len(rows)} pages")
 
 

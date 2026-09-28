@@ -13,6 +13,8 @@ from scrapy.utils.sitemap import Sitemap, sitemap_urls_from_robots
 from scrapy.utils.url import url_has_any_extension
 from w3lib.url import canonicalize_url
 
+from polite_crawler.maintext import main_text
+
 # Files, not pages. Scrapy's list plus a few it misses.
 DENY_EXTENSIONS = sorted(set(IGNORED_EXTENSIONS) | {"avif", "gz", "json", "woff", "woff2"})
 # Click-tracking tags: the same page with a different label, not a new page.
@@ -180,12 +182,7 @@ class SiteSpider(scrapy.Spider):
                     raise CloseSpider("page_cap")
             return
 
-        content = response.xpath("//main | //article | //*[@role='main']")
-        root = content[0] if content else response
-        text = root.xpath(
-            ".//text()[normalize-space() and not(ancestor::script | ancestor::style | ancestor::noscript | ancestor::svg | ancestor::nav | ancestor::footer | ancestor::header)]"
-        ).getall()
-        clean_text = " ".join(part.strip() for part in text if part.strip())
+        clean_text, text_source = main_text(response.text, response.selector.root)
         robots_meta = " ".join(response.xpath("//meta[@name='robots']/@content").getall()).lower()
         canonical_url = response.urljoin(response.css("link[rel='canonical']::attr(href)").get(default=response.url))
         links = [
@@ -200,6 +197,7 @@ class SiteSpider(scrapy.Spider):
             canonical_url=canonical_url,
             headings=[heading.strip() for heading in response.css("h1::text, h2::text").getall() if heading.strip()],
             text=clean_text,
+            text_source=text_source,
             word_count=len(clean_text.split()),
             links_found=len(links),
         )
@@ -224,6 +222,7 @@ class SiteSpider(scrapy.Spider):
             "canonical_url": response.url,
             "headings": [],
             "text": "",
+            "text_source": None,
             "word_count": 0,
             "links_found": 0,
             **fields,
