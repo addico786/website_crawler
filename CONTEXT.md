@@ -44,3 +44,20 @@
   the plan's order, steps 1-13 with the supervisor's changes; step 14 = VERSION
   1.2.1, docs, a books.toscrape.com sanity crawl, the real 1.2.0 -> 1.2.1
   update test on Windows. Merge and tag are left to the owner/supervisor.
+- 1.2.2 (branch `fix/1.2.2-js-routes`, PR #3; plan and root-cause evidence in
+  `docs/PLAN-1.2.2.md`): textifydigitals.com's nginx answers every path with 200
+  and the same pre-rendered home page; the React app draws the real page in the
+  browser. Render JavaScript now waits for networkidle (max 10 s). Before the
+  first page the spider downloads a made-up address directly (no row, no cap,
+  no links); when the plain start page is byte-identical and both are 200, it
+  notes `same_page_for_every_address` and switches to rendering (falls back
+  and says so when Chromium is missing). Sitemap pages wait for that decision.
+  The check and the decision are written to `summary.json` at once (Stop kills
+  the crawl), so a resume keeps them. Rows carry requested/final URL, redirect
+  chain, response bytes and sha256, rendered, and `suspicious: SAME_RESPONSE`;
+  `canonical_to_home` is noted when most pages name / as canonical. Owner
+  additions: a per-user Inno Setup installer (`installer/WebsiteCrawler.iss`,
+  `WebsiteCrawler-Setup.exe`, second release asset; the zip the updater uses is
+  unchanged), smoke-tested on every PR (silent install, start, uninstall).
+  Live check (cap 8, no --render-js): switched by itself, 8 different pages.
+  Merge and tag are left to the owner.

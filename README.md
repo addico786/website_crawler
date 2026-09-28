@@ -12,11 +12,12 @@ Already installed? Use Check for Updates in the app.
 
 ---
 
-## What is new in 1.2.1
+## What is new in 1.2.2
 
-- **Less redundant data**: the main text of each page comes from trafilatura, so listing pages keep all their items; text repeated across most pages (banners, side blocks) is found once per job and left out of the dashboard and exports; URL variants and `rel=canonical` twins are fetched once; exact and near-duplicate pages are marked; endless calendars and loops are skipped; a page cap of 30 saves exactly 30 pages.
-- **A result line** at the end of every crawl: pages, duplicates, near duplicates, boilerplate blocks and trap URLs skipped (also in `summary.json`).
-- **Safer**: the dashboard refuses other sites' requests, updates are installed only when their sha256 matches the digest GitHub publishes, and CSV exports cannot run spreadsheet formulas.
+- **Sites that send the same page for every address** (apps that draw each page in the browser): the crawler notices, switches to Render JavaScript by itself and saves each page's own text. Before, every page came out as a copy of the home page.
+- **Render JavaScript waits for the page to settle** before saving it.
+- **Clearer results**: each row says what was asked for and what came back (redirects, size, sha256, rendered or not); the Result line counts suspicious pages; sites whose pages all name the home page as canonical are reported.
+- **A Windows installer**, `WebsiteCrawler-Setup.exe`: per user, no admin prompt, with shortcuts and an uninstaller.
 
 Full list: [CHANGELOG.md](CHANGELOG.md).
 
