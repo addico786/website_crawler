@@ -694,6 +694,10 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
         "headings",
         "crawled_at",
         "found_on",
+        "text_source",
+        "content_hash",
+        "duplicate_of",
+        "near_duplicate_of",
         "text",
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")

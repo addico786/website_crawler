@@ -33,3 +33,22 @@ def test_csv_export_escapes_formulas():
         assert client.get("/api/jobs/test_csv_formulas/export?format=json").json()[0]["title"] == row["title"]
     finally:
         shutil.rmtree(job, ignore_errors=True)
+
+
+def test_csv_export_has_the_duplicate_and_text_source_columns():
+    job = JOBS_DIR / "test_csv_columns"
+    job.mkdir(parents=True, exist_ok=True)
+    try:
+        new = {"url": "https://example.com/b", "status": 200, "text": "Body", "text_source": "trafilatura",
+               "content_hash": "ab" * 32, "duplicate_of": "https://example.com/a", "near_duplicate_of": None}
+        old = {"url": "https://example.com/old", "status": 200, "text": "Saved by 1.1.1"}  # no such fields
+        (job / "results.jsonl").write_text(json.dumps(new) + "\n" + json.dumps(old) + "\n", encoding="utf-8")
+        response = client.get("/api/jobs/test_csv_columns/export?format=csv")
+        assert response.status_code == 200
+        rows = list(csv.DictReader(io.StringIO(response.text)))
+        assert rows[0]["text_source"] == "trafilatura" and rows[0]["content_hash"] == "ab" * 32
+        assert rows[0]["duplicate_of"] == "https://example.com/a" and rows[0]["near_duplicate_of"] == ""
+        assert rows[1]["url"] == "https://example.com/old" and rows[1]["duplicate_of"] == "" and rows[1]["text_source"] == ""
+        assert list(rows[0])[-1] == "text"  # the long column stays last
+    finally:
+        shutil.rmtree(job, ignore_errors=True)

@@ -108,3 +108,4 @@ def test_crawl_stops_at_calendar_and_loop_traps(crawl, tmp_path):
     summary = json.loads((tmp_path / "job" / "summary.json").read_text(encoding="utf-8"))
     assert summary["skipped"] == {"future_date": 1, "repeated_segments": 1}
     assert summary["suspected_traps"] == []
+    assert summary["result"]["trap_urls_skipped"] == 2 and summary["result"]["pages"] == len(rows)

@@ -68,6 +68,19 @@ class JobOutputPipeline:
             if key.startswith("downloader/response_status_count/")
         }
         traps = getattr(spider, "traps", None)
+        # What the owner sees: the job's pages and how much redundancy was marked or removed.
+        result = {
+            "pages": len(rows),
+            "duplicates": sum(1 for row in rows if row.get("duplicate_of")),
+            "near_duplicates": sum(1 for row in rows if row.get("near_duplicate_of")),
+            "boilerplate_blocks": len(blocks),
+            "trap_urls_skipped": sum(traps.skipped.values()) if traps else 0,
+        }
+        logger.info(
+            "Result: %(pages)d pages, %(duplicates)d duplicates, %(near_duplicates)d near duplicates, "
+            "%(boilerplate_blocks)d boilerplate blocks, %(trap_urls_skipped)d trap URLs skipped",
+            result,
+        )
         summary = {
             "seed_url": spider.start_urls[0],
             "allowed_hosts": spider.allowed_domains,
@@ -75,6 +88,8 @@ class JobOutputPipeline:
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "finish_reason": reason,
             "pages_saved_this_run": self.saved,
+            # Totals over every run of the job; trap URLs skipped by this run.
+            "result": result,
             "requests_sent": stats.get("downloader/request_count", 0),
             "responses_by_status": status_counts,
             "request_errors": stats.get("downloader/exception_count", 0),

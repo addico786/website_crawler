@@ -17,3 +17,9 @@ def test_fixture_site_crawl(fixture_site, crawl, tmp_path):
     note = "Questions about a plant? Our growers answer every email within one working day."
     assert note in boilerplate["blocks"] and boilerplate["pages_with_text"] == 6
     assert note in by_path["/guides/planting.html"]["text"]  # results.jsonl keeps the full text
+    # The result line and summary.json say what was marked and removed.
+    result = json.loads((tmp_path / "job" / "summary.json").read_text(encoding="utf-8"))["result"]
+    assert result == {"pages": 6, "duplicates": 0, "near_duplicates": 0, "boilerplate_blocks": len(boilerplate["blocks"]),
+                      "trap_urls_skipped": 0}
+    log = (tmp_path / "job" / "job.log").read_text(encoding="utf-8")
+    assert f"Result: 6 pages, 0 duplicates, 0 near duplicates, {len(boilerplate['blocks'])} boilerplate blocks, 0 trap URLs skipped" in log
