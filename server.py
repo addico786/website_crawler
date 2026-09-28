@@ -1,6 +1,7 @@
 import asyncio
 import ctypes
 import csv
+import hashlib
 import io
 import json
 import os
@@ -34,6 +35,9 @@ VERSION = "1.1.1"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
 UPDATE_URL = os.environ.get("CRAWLER_UPDATE_URL", f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
+# The one release asset the updater installs: a zip whose top folder holds WebsiteCrawler.exe,
+# WebsiteCrawlerWorker.exe and _internal/ (1.1.1 took the first .zip; keep exactly one).
+UPDATE_ASSET = "WebsiteCrawler-windows.zip"
 
 # Base Directory & Paths. In the packaged .exe (PyInstaller), bundled files live in
 # sys._MEIPASS while jobs/ sits next to the .exe so it survives updates.
@@ -774,16 +778,52 @@ def check_for_update():
         raise HTTPException(status_code=502, detail=f"Could not reach GitHub: {e}")
 
     latest = release.get("tag_name", "").lstrip("v")
-    zips = [a["browser_download_url"] for a in release.get("assets", []) if a.get("name", "").endswith(".zip")]
+    asset = next((a for a in release.get("assets", []) if a.get("name") == UPDATE_ASSET), {})
+    # GitHub publishes each asset's sha256 as "sha256:<hex>". Without one the download can't be
+    # checked, so only the release page is offered.
+    digest = asset.get("digest") or ""
+    sha256 = digest[len("sha256:"):].lower() if digest.startswith("sha256:") else None
     return {
         "current_version": VERSION,
         "latest_version": latest,
         "update_available": parse_version(latest) > parse_version(VERSION),
         "release_url": release.get("html_url"),
-        "download_url": zips[0] if zips else None,
+        "download_url": asset.get("browser_download_url") if sha256 else None,
+        "sha256": sha256,
         "notes": release.get("body") or "",
         "can_self_update": get_version()["can_self_update"],
     }
+
+
+def download_update(url: str, sha256: str, staging: Path, exe_name: str) -> Path:
+    """Download the release zip into staging/, check its sha256, unpack it; returns the folder holding exe_name."""
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir()
+    archive = staging / "update.zip"
+    try:
+        digest = hashlib.sha256()
+        request = urllib.request.Request(url, headers={"User-Agent": f"WebsiteCrawler/{VERSION}"})
+        with urllib.request.urlopen(request, timeout=300) as response, open(archive, "wb") as out:
+            while chunk := response.read(1024 * 1024):
+                digest.update(chunk)
+                out.write(chunk)
+        if digest.hexdigest() != sha256:
+            raise ValueError("the file's checksum does not match the one published with the release")
+        target = (staging / "new").resolve()
+        with zipfile.ZipFile(archive) as zf:
+            for name in zf.namelist():
+                if not (target / name).resolve().is_relative_to(target):
+                    raise ValueError(f"the package has an entry outside its folder: {name}")
+            zf.extractall(target)
+    except Exception as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise HTTPException(status_code=502, detail=f"Failed to download update: {e}")
+
+    found = list((staging / "new").rglob(exe_name))
+    if not found:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise HTTPException(status_code=502, detail=f"Update package has no {exe_name}.")
+    return found[0].parent
 
 
 @app.post("/api/update/install")
@@ -798,25 +838,8 @@ def install_update():
         raise HTTPException(status_code=400, detail="No downloadable update available.")
 
     staging = BASE_DIR / "_update"
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir()
-    archive = staging / "update.zip"
-    try:
-        request = urllib.request.Request(info["download_url"], headers={"User-Agent": f"WebsiteCrawler/{VERSION}"})
-        with urllib.request.urlopen(request, timeout=300) as response, open(archive, "wb") as out:
-            shutil.copyfileobj(response, out)
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(staging / "new")
-    except Exception as e:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise HTTPException(status_code=502, detail=f"Failed to download update: {e}")
-
     exe = Path(sys.executable)
-    found = list((staging / "new").rglob(exe.name))
-    if not found:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise HTTPException(status_code=502, detail=f"Update package has no {exe.name}.")
-    new_dir = found[0].parent
+    new_dir = download_update(info["download_url"], info["sha256"], staging, exe.name)
 
     # A running .exe can't overwrite itself: hand off to a script that waits for this
     # process to exit, swaps the files (jobs/ is left alone), and starts the new version.

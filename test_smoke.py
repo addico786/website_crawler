@@ -89,7 +89,8 @@ def test_update_check(monkeypatch):
     release = {
         "tag_name": "v99.0.0",
         "html_url": "https://github.com/x/y/releases/tag/v99.0.0",
-        "assets": [{"name": "WebsiteCrawler-windows.zip", "browser_download_url": "https://example.com/a.zip"}],
+        "assets": [{"name": "WebsiteCrawler-windows.zip", "browser_download_url": "https://example.com/a.zip",
+                    "digest": "sha256:" + "0" * 64}],
     }
     monkeypatch.setattr(server, "fetch_latest_release", lambda: release)
     data = client.get("/api/update/check").json()
