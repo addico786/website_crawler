@@ -1,7 +1,8 @@
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import scrapy
 from scrapy.exceptions import CloseSpider
@@ -10,7 +11,7 @@ from scrapy.linkextractors import IGNORED_EXTENSIONS, LinkExtractor
 from scrapy.utils.gz import gunzip
 from scrapy.utils.sitemap import Sitemap, sitemap_urls_from_robots
 from scrapy.utils.url import url_has_any_extension
-from w3lib.url import canonicalize_url, url_query_cleaner
+from w3lib.url import canonicalize_url
 
 # Files, not pages. Scrapy's list plus a few it misses.
 DENY_EXTENSIONS = sorted(set(IGNORED_EXTENSIONS) | {"avif", "gz", "json", "woff", "woff2"})
@@ -21,13 +22,42 @@ TRACKING_PARAMS = (
 )
 
 
-def strip_tracking(url):
-    return url_query_cleaner(url, TRACKING_PARAMS, remove=True, unique=False, keep_fragments=True)
+# Session ids: the same page for every visitor. "sid" only when it looks like one (32 hex digits).
+SESSION_PARAMS = ("jsessionid", "phpsessid", "sessionid")
+SESSION_ID = re.compile(r"[0-9a-f]{32}", re.I)
+DEFAULT_PORTS = {"http": 80, "https": 443}
+INDEX_FILE = re.compile(r"/index\.(?:html?|php)$", re.I)
+
+
+def clean_url(url):
+    """The URL to request: as found, minus click-tracking tags and session ids."""
+    parts = urlsplit(url)
+    path = re.sub(r";jsessionid=[^/?#]*", "", parts.path, flags=re.I)
+    kept = []
+    for pair in parts.query.split("&") if parts.query else []:
+        name, _, value = pair.partition("=")
+        name = unquote(name).lower()
+        if name in TRACKING_PARAMS or name in SESSION_PARAMS or (name == "sid" and SESSION_ID.fullmatch(unquote(value))):
+            continue
+        kept.append(pair)
+    return urlunsplit(parts._replace(path=path, query="&".join(kept)))
 
 
 def page_key(url):
-    """Same page => same key: ignores #fragments, query order and trailing-slash-on-host."""
-    return canonicalize_url(url)
+    """Same page => same key. Used only to spot duplicates; requests go to the URL as found.
+
+    Ignores host case, a leading www., the default port, #fragments, query order, one trailing
+    slash and a final index.html/htm/php. Keeps path case (servers may treat /A and /a apart).
+    """
+    parts = urlsplit(canonicalize_url(clean_url(url)))
+    host = (parts.hostname or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    if parts.port and parts.port != DEFAULT_PORTS.get(parts.scheme):
+        host += f":{parts.port}"
+    path = INDEX_FILE.sub("/", parts.path) or "/"
+    if path != "/" and path.endswith("/"):
+        path = path[:-1]
+    return urlunsplit((parts.scheme.lower(), host, path, parts.query, ""))
 
 
 class SiteSpider(scrapy.Spider):
@@ -55,11 +85,16 @@ class SiteSpider(scrapy.Spider):
         # Pages saved by earlier runs of this job, so resuming doesn't save them twice.
         results = Path(job_dir) / "results.jsonl"
         self.saved_urls = set()
+        self.rows = 0
         if results.exists():
             with results.open(encoding="utf-8") as f:
-                self.saved_urls = {page_key(json.loads(line)["url"]) for line in f if line.strip()}
-        self.rows = len(self.saved_urls)
-        self.link_extractor = LinkExtractor(deny_extensions=DENY_EXTENSIONS, process_value=strip_tracking, unique=True)
+                for line in f:
+                    if line.strip():
+                        self.saved_urls.add(page_key(json.loads(line)["url"]))
+                        self.rows += 1
+        # Keys of pages saved or already requested: a link to one of them is not requested again.
+        self.seen_keys = set(self.saved_urls)
+        self.link_extractor = LinkExtractor(deny_extensions=DENY_EXTENSIONS, process_value=clean_url, unique=True)
 
     def add_host(self, host):
         host = host.lower()
@@ -80,8 +115,16 @@ class SiteSpider(scrapy.Spider):
             meta |= {"playwright": True, "playwright_include_page": False}
         return scrapy.Request(url, callback=callback or self.parse, meta=meta, dont_filter=dont_filter)
 
+    def follow(self, url):
+        """Request a page unless a URL with the same key was already requested or saved."""
+        key = page_key(url)
+        if key not in self.seen_keys:
+            self.seen_keys.add(key)
+            yield self.request(url)
+
     async def start(self):
         seed = self.start_urls[0]
+        self.seen_keys.add(page_key(seed))
         yield self.request(seed, dont_filter=True, seed=True)
         if self.use_sitemap:
             parsed = urlparse(seed)
@@ -105,12 +148,12 @@ class SiteSpider(scrapy.Spider):
             return
         # Sitemap yields only <url>/<sitemap> locations, not <image:loc> and friends.
         for entry in sitemap:
-            url = strip_tracking(response.urljoin(entry["loc"].strip()))
+            url = clean_url(response.urljoin(entry["loc"].strip()))
             if sitemap.type == "sitemapindex":
                 if self.in_scope(url):
                     yield self.request(url, callback=self.parse_sitemap)
             elif self.is_page_url(url):
-                yield self.request(url)
+                yield from self.follow(url)
 
     def at_cap(self):
         return bool(self.max_pages) and self.rows >= self.max_pages
@@ -126,6 +169,7 @@ class SiteSpider(scrapy.Spider):
         if key in self.saved_urls or not self.in_scope(response.url):
             return
         self.saved_urls.add(key)
+        self.seen_keys.add(key)
         found_on = response.request.headers.get("Referer", b"").decode("latin-1")
 
         if not isinstance(response, HtmlResponse):
@@ -143,6 +187,7 @@ class SiteSpider(scrapy.Spider):
         ).getall()
         clean_text = " ".join(part.strip() for part in text if part.strip())
         robots_meta = " ".join(response.xpath("//meta[@name='robots']/@content").getall()).lower()
+        canonical_url = response.urljoin(response.css("link[rel='canonical']::attr(href)").get(default=response.url))
         links = [
             link for link in self.link_extractor.extract_links(response)
             if self.in_scope(link.url) and not link.nofollow
@@ -152,7 +197,7 @@ class SiteSpider(scrapy.Spider):
             found_on,
             title=response.css("title::text").get(default="").strip(),
             description=response.css("meta[name='description']::attr(content)").get(default="").strip(),
-            canonical_url=response.urljoin(response.css("link[rel='canonical']::attr(href)").get(default=response.url)),
+            canonical_url=canonical_url,
             headings=[heading.strip() for heading in response.css("h1::text, h2::text").getall() if heading.strip()],
             text=clean_text,
             word_count=len(clean_text.split()),
@@ -163,8 +208,11 @@ class SiteSpider(scrapy.Spider):
         # Error pages' relative links resolve against a URL that doesn't exist, which
         # spirals into /missing/deeper/deeper/... Only follow links from real pages.
         if response.status < 300 and "nofollow" not in robots_meta:
+            # The page names another URL as the real one (e.g. ?color=red -> the product): fetch that too.
+            if page_key(canonical_url) != key and self.is_page_url(canonical_url):
+                yield from self.follow(clean_url(canonical_url))
             for link in links:
-                yield self.request(link.url)
+                yield from self.follow(link.url)
 
     def item(self, response, found_on, **fields):
         self.rows += 1
