@@ -38,3 +38,9 @@
   near-duplicate marking, trap limits, hard page cap, Retry-After and
   Crawl-delay, plus the safety fixes and a smoke crawl of the built exe in
   the release workflow). Next: supervisor review, then build, then tag v1.1.2.
+- 1.2.0 (the Slush redesign with orbs) shipped first, merged as 9cb4739. The
+  fixes planned as 1.1.2 ship as 1.2.1 from branch `fix/1.1.2-crawler-and-safety`
+  (name kept), PR #1, with main merged in; `CHANGELOG.md` lists them. Built in
+  the plan's order, steps 1-13 with the supervisor's changes; step 14 = VERSION
+  1.2.1, docs, a books.toscrape.com sanity crawl, the real 1.2.0 -> 1.2.1
+  update test on Windows. Merge and tag are left to the owner/supervisor.

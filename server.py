@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 
 from polite_crawler.textblocks import load_boilerplate, strip_boilerplate
 
-VERSION = "1.2.0"  # Bump before tagging a release; the tag must be v<VERSION>.
+VERSION = "1.2.1"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
 UPDATE_URL = os.environ.get("CRAWLER_UPDATE_URL", f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
