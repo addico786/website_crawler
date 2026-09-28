@@ -218,7 +218,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (focusJob) {
       const card = [...jobsListContainer.querySelectorAll(".job-item")].find((el) => el.getAttribute("data-job-id") === focusJob);
-      const target = card && card.querySelector(focusPart);
+      const target = (card && card.querySelector(focusPart)) || jobsListContainer.querySelector(".job-item-main");
       if (target) target.focus();
     }
   }
@@ -792,6 +792,75 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
   });
+
+  // --- Modals: Escape closes, Tab stays inside, focus returns to the opener ---
+  // The existing code opens and closes modals by setting style.display, so
+  // watch that instead of touching every open/close site.
+  const modals = [crawlModal, detailModal, modalConfirmDelete].filter(Boolean);
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea, [tabindex]:not([tabindex="-1"])';
+  const isOpen = (m) => m.style.display !== "none" && m.style.display !== "";
+  const focusables = (m) => [...m.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+
+  // Find the opener again even if the list or table was re-rendered meanwhile.
+  function locate(el) {
+    if (!el || el === document.body) return () => null;
+    const card = el.closest(".job-item");
+    if (card) {
+      const id = card.getAttribute("data-job-id");
+      const part = el.classList.contains("job-item-delete") ? ".job-item-delete" : ".job-item-main";
+      return () => {
+        const c = [...jobsListContainer.querySelectorAll(".job-item")].find((x) => x.getAttribute("data-job-id") === id);
+        return (c && c.querySelector(part)) || jobsListContainer.querySelector(".job-item-main");
+      };
+    }
+    const index = el.getAttribute("data-index");
+    if (index !== null && tableBody.contains(el)) return () => tableBody.querySelector(`.btn-view-detail[data-index="${index}"]`);
+    return () => el;
+  }
+
+  modals.forEach((m) => {
+    let wasOpen = isOpen(m);
+    let opener = () => null;
+    new MutationObserver(() => {
+      if (isOpen(m) === wasOpen) return;
+      wasOpen = isOpen(m);
+      if (wasOpen) {
+        opener = locate(document.activeElement);
+        const first = m.querySelector("[data-initial-focus]") || focusables(m)[0];
+        if (first) first.focus();
+      } else {
+        const back = opener();
+        (back && back.isConnected && back.offsetParent !== null ? back : btnNewCrawlModal).focus();
+      }
+    }).observe(m, { attributes: true, attributeFilter: ["style"] });
+  });
+
+  document.addEventListener("keydown", (e) => {
+    const m = [...modals].reverse().find(isOpen);
+    if (!m) {
+      // The live log is an inline panel, not a modal: Escape just closes it.
+      if (e.key === "Escape" && consoleDrawer && consoleDrawer.contains(document.activeElement)) btnCloseConsole.click();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      const close = m.querySelector("[data-modal-close]");
+      if (close) close.click();
+    } else if (e.key === "Tab") {
+      const items = focusables(m);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!m.contains(document.activeElement) || (e.shiftKey && document.activeElement === first)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  });
+  if (btnCloseConsole && btnToggleLog) btnCloseConsole.addEventListener("click", () => btnToggleLog.focus());
 
   // Initial Load & Auto-polling
   fetchOverviewStats();
