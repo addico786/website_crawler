@@ -1,10 +1,28 @@
 """Write results and a human-readable summary beside each persistent job."""
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 from scrapy import signals
 from scrapy.exceptions import DropItem
+
+from polite_crawler.textblocks import find_boilerplate, write_boilerplate
+
+logger = logging.getLogger(__name__)
+
+
+def read_rows(path):
+    """Every row of a results.jsonl, skipping a line cut short by a hard stop."""
+    rows = []
+    if path.exists():
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    return rows
 
 
 class JobOutputPipeline:
@@ -39,6 +57,10 @@ class JobOutputPipeline:
     def spider_closed(self, spider, reason):
         if hasattr(self, "file"):
             self.file.close()
+        # Site-wide boilerplate, over every run of this job. Exact copies would count their blocks twice.
+        rows = read_rows(self.job_dir / "results.jsonl")
+        blocks, pages = find_boilerplate(row.get("text", "") for row in rows if not row.get("duplicate_of"))
+        write_boilerplate(self.job_dir, blocks, pages)
         stats = self.crawler.stats.get_stats()
         status_counts = {
             key.rsplit("/", 1)[-1]: value

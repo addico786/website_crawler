@@ -31,6 +31,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from polite_crawler.textblocks import load_boilerplate, strip_boilerplate
+
 VERSION = "1.1.1"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
@@ -130,6 +132,27 @@ def get_job_path(job_id: str) -> Path:
     if path.parent != JOBS_DIR:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return path
+
+
+def load_items(job_path: Path) -> list:
+    """A job's rows, with its site-wide boilerplate (boilerplate.json) taken out of each text
+    and word_count recomputed. results.jsonl itself keeps the full text."""
+    results_file = job_path / "results.jsonl"
+    if not results_file.exists():
+        return []
+    blocks = load_boilerplate(job_path)
+    items = []
+    with open(results_file, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                item = json.loads(line)
+            except ValueError:  # blank, or a line the crawler is still writing
+                continue
+            if blocks and item.get("text"):
+                item["text"] = strip_boilerplate(item["text"], blocks)
+                item["word_count"] = len(item["text"].split())
+            items.append(item)
+    return items
 
 
 def pid_exists(pid: int) -> bool:
@@ -491,7 +514,6 @@ def get_job_detail(job_id: str):
     status = get_job_status(job_id)
     summary_file = job_path / "summary.json"
     pid_file = job_path / "pid.json"
-    results_file = job_path / "results.jsonl"
     log_file = job_path / "job.log"
 
     summary_data = {}
@@ -511,18 +533,13 @@ def get_job_detail(job_id: str):
     pages_saved = 0
     total_words = 0
     total_links = 0
-    if results_file.exists():
-        try:
-            with open(results_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    item = json.loads(line)
-                    pages_saved += 1
-                    total_words += item.get("word_count", 0)
-                    total_links += item.get("links_found", 0)
-        except Exception:
-            pass
+    try:
+        for item in load_items(job_path):
+            pages_saved += 1
+            total_words += item.get("word_count", 0)
+            total_links += item.get("links_found", 0)
+    except Exception:
+        pass
 
     recent_logs = ""
     if log_file.exists():
@@ -563,34 +580,29 @@ def get_job_results(
     matched_items = []
 
     try:
-        with open(results_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
+        for item in load_items(job_path):
+            # Apply status_code filter
+            if status_code is not None and item.get("status") != status_code:
+                continue
+
+            # Apply search filter
+            if search_query:
+                url = item.get("url", "").lower()
+                title = item.get("title", "").lower()
+                desc = item.get("description", "").lower()
+                text = item.get("text", "").lower()
+                headings = " ".join(item.get("headings", [])).lower()
+
+                if (
+                    search_query not in url
+                    and search_query not in title
+                    and search_query not in desc
+                    and search_query not in text
+                    and search_query not in headings
+                ):
                     continue
-                item = json.loads(line)
-                
-                # Apply status_code filter
-                if status_code is not None and item.get("status") != status_code:
-                    continue
 
-                # Apply search filter
-                if search_query:
-                    url = item.get("url", "").lower()
-                    title = item.get("title", "").lower()
-                    desc = item.get("description", "").lower()
-                    text = item.get("text", "").lower()
-                    headings = " ".join(item.get("headings", [])).lower()
-
-                    if (
-                        search_query not in url
-                        and search_query not in title
-                        and search_query not in desc
-                        and search_query not in text
-                        and search_query not in headings
-                    ):
-                        continue
-
-                matched_items.append(item)
+            matched_items.append(item)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading job results: {str(e)}")
 
@@ -656,12 +668,8 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
     if not results_file.exists():
         raise HTTPException(status_code=404, detail=f"No results found for job '{job_id}'.")
 
-    items = []
     try:
-        with open(results_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    items.append(json.loads(line))
+        items = load_items(job_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read results: {str(e)}")
 
@@ -720,18 +728,13 @@ def get_global_stats():
                 if is_job_running(job_id):
                     active_jobs += 1
 
-                results_file = item / "results.jsonl"
-                if results_file.exists():
-                    try:
-                        with open(results_file, "r", encoding="utf-8") as f:
-                            for line in f:
-                                if line.strip():
-                                    data = json.loads(line)
-                                    total_pages += 1
-                                    total_words += data.get("word_count", 0)
-                                    total_links += data.get("links_found", 0)
-                    except Exception:
-                        pass
+                try:
+                    for data in load_items(item):
+                        total_pages += 1
+                        total_words += data.get("word_count", 0)
+                        total_links += data.get("links_found", 0)
+                except Exception:
+                    pass
 
     return {
         "total_jobs": total_jobs,

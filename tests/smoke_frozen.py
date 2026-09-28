@@ -54,7 +54,9 @@ def smoke_crawl(job):
         fail(f"only {len(rows)} pages saved", log)
     if not any(row.get("text_source") == "trafilatura" for row in rows):
         fail("no page's main text came from trafilatura (its data files may be missing from the build)", log)
-    print(f"Crawl OK: {len(rows)} pages")
+    if not (job / "boilerplate.json").exists():
+        fail("no boilerplate.json written at the end of the crawl", log)
+    print(f"Crawl OK: {len(rows)} pages, boilerplate: {(job / 'boilerplate.json').read_text(encoding='utf-8')}")
 
 
 def smoke_server():

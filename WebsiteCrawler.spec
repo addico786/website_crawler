@@ -24,6 +24,7 @@ hiddenimports = [
     "polite_crawler.maintext",
     "polite_crawler.fingerprints",
     "polite_crawler.traps",
+    "polite_crawler.textblocks",
     "twisted.internet.asyncioreactor",
     *collect_submodules("scrapy_playwright"),
     *collect_submodules("uvicorn"),
