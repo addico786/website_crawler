@@ -32,3 +32,9 @@
   signing needs a key only the owner holds: ask him.
 - Branch per version, PR, CI green, merge, tag `v<VERSION>` (VERSION in
   `server.py`).
+- 1.1.2 plan written (2026-09-28): `docs/PLAN-1.1.2.md`, based on
+  `docs/research/crawler-research.md` (trafilatura main text, site-wide
+  boilerplate removal, URL normalisation, canonical following, exact and
+  near-duplicate marking, trap limits, hard page cap, Retry-After and
+  Crawl-delay, plus the safety fixes and a smoke crawl of the built exe in
+  the release workflow). Next: supervisor review, then build, then tag v1.1.2.
