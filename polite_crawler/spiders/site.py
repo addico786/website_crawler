@@ -13,6 +13,7 @@ from scrapy.utils.sitemap import Sitemap, sitemap_urls_from_robots
 from scrapy.utils.url import url_has_any_extension
 from w3lib.url import canonicalize_url
 
+from polite_crawler.fingerprints import NearDuplicates, content_hash, simhash
 from polite_crawler.maintext import main_text
 
 # Files, not pages. Scrapy's list plus a few it misses.
@@ -88,15 +89,27 @@ class SiteSpider(scrapy.Spider):
         results = Path(job_dir) / "results.jsonl"
         self.saved_urls = set()
         self.rows = 0
+        # Text fingerprints of saved pages: content_hash -> first URL, and the SimHash bands.
+        self.hashes = {}
+        self.near_duplicates = NearDuplicates()
         if results.exists():
             with results.open(encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
-                        self.saved_urls.add(page_key(json.loads(line)["url"]))
+                        row = json.loads(line)
+                        self.saved_urls.add(page_key(row["url"]))
                         self.rows += 1
+                        self.remember_text(row)
         # Keys of pages saved or already requested: a link to one of them is not requested again.
         self.seen_keys = set(self.saved_urls)
         self.link_extractor = LinkExtractor(deny_extensions=DENY_EXTENSIONS, process_value=clean_url, unique=True)
+
+    def remember_text(self, row):
+        """Record a saved page's fingerprints so later copies are marked as duplicates."""
+        if row.get("content_hash") and not row.get("duplicate_of"):
+            self.hashes.setdefault(row["content_hash"], row["url"])
+            if row.get("simhash"):
+                self.near_duplicates.add(int(row["simhash"], 16), row["url"])
 
     def add_host(self, host):
         host = host.lower()
@@ -183,13 +196,18 @@ class SiteSpider(scrapy.Spider):
             return
 
         clean_text, text_source = main_text(response.text, response.selector.root)
+        # Error pages often share one text ("Not found"); they are not duplicates of each other.
+        text_hash = content_hash(clean_text) if response.status < 300 else None
+        fingerprint = simhash(clean_text) if text_hash else None
+        duplicate_of = self.hashes.get(text_hash)
+        near_duplicate_of = self.near_duplicates.find(fingerprint) if fingerprint is not None and not duplicate_of else None
         robots_meta = " ".join(response.xpath("//meta[@name='robots']/@content").getall()).lower()
         canonical_url = response.urljoin(response.css("link[rel='canonical']::attr(href)").get(default=response.url))
         links = [
             link for link in self.link_extractor.extract_links(response)
             if self.in_scope(link.url) and not link.nofollow
         ]
-        yield self.item(
+        item = self.item(
             response,
             found_on,
             title=response.css("title::text").get(default="").strip(),
@@ -200,12 +218,20 @@ class SiteSpider(scrapy.Spider):
             text_source=text_source,
             word_count=len(clean_text.split()),
             links_found=len(links),
+            content_hash=text_hash,
+            simhash=f"{fingerprint:016x}" if fingerprint is not None else None,
+            duplicate_of=duplicate_of,
+            near_duplicate_of=near_duplicate_of,
         )
+        self.remember_text(item)
+        yield item
         if self.at_cap():
             raise CloseSpider("page_cap")
         # Error pages' relative links resolve against a URL that doesn't exist, which
         # spirals into /missing/deeper/deeper/... Only follow links from real pages.
-        if response.status < 300 and "nofollow" not in robots_meta:
+        # An exact copy of a saved page links to the same places (and may be a trap: a
+        # pagination series past its end repeats the last page).
+        if response.status < 300 and "nofollow" not in robots_meta and not duplicate_of:
             # The page names another URL as the real one (e.g. ?color=red -> the product): fetch that too.
             if page_key(canonical_url) != key and self.is_page_url(canonical_url):
                 yield from self.follow(clean_url(canonical_url))
@@ -225,6 +251,10 @@ class SiteSpider(scrapy.Spider):
             "text_source": None,
             "word_count": 0,
             "links_found": 0,
+            "content_hash": None,
+            "simhash": None,
+            "duplicate_of": None,
+            "near_duplicate_of": None,
             **fields,
             "found_on": found_on,
             "crawled_at": datetime.now(timezone.utc).isoformat(),
