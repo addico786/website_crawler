@@ -66,4 +66,13 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/WebsiteCrawler-windows.zip
+          # Shown above the generated change list: which file to take and what to do with it.
+          body: |
+            **Download `WebsiteCrawler-windows.zip` below** (not "Source code"). Unzip it, open the WebsiteCrawler folder, double-click WebsiteCrawler.exe.
+
+            If Windows SmartScreen says "Windows protected your PC":
+            click "More info", then "Run anyway".
+            The app is not code-signed yet.
+
+            Already installed? Use Check for Updates in the app.
           generate_release_notes: true

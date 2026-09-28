@@ -3,6 +3,7 @@
 1. WebsiteCrawlerWorker.exe --crawl crawls tests/fixtures/site/ (served on 127.0.0.1);
    fails unless enough pages are saved.
 2. WebsiteCrawler.exe --server-only must answer / and /api/version with this VERSION.
+3. The release zip beside it must hold WebsiteCrawler/WebsiteCrawler.exe and the install steps.
 
 Usage: python tests/smoke_frozen.py [dist/WebsiteCrawler]
 """
@@ -15,6 +16,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import zipfile
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -59,6 +61,18 @@ def smoke_crawl(job):
     print(f"Crawl OK: {len(rows)} pages, boilerplate: {(job / 'boilerplate.json').read_text(encoding='utf-8')}")
 
 
+def smoke_zip():
+    # The updater looks for WebsiteCrawler.exe inside the zip; people need the install steps beside it.
+    zip_path = DIST.parent / "WebsiteCrawler-windows.zip"
+    if not zip_path.exists():
+        fail(f"{zip_path} was not built")
+    names = set(zipfile.ZipFile(zip_path).namelist())
+    for needed in ("WebsiteCrawler/WebsiteCrawler.exe", "WebsiteCrawler/WebsiteCrawlerWorker.exe", "WebsiteCrawler/HOW TO INSTALL.txt"):
+        if needed not in names:
+            fail(f"{needed} is missing from {zip_path.name}")
+    print(f"Zip OK: {len(names)} files, with HOW TO INSTALL.txt")
+
+
 def smoke_server():
     env = {**os.environ, "PORT": str(PORT)}
     proc = subprocess.Popen([str(DIST / "WebsiteCrawler.exe"), "--server-only"], env=env)
@@ -84,6 +98,7 @@ def smoke_server():
 
 
 if __name__ == "__main__":
+    smoke_zip()
     with tempfile.TemporaryDirectory() as directory:
         smoke_crawl(Path(directory))
     smoke_server()

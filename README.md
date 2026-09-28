@@ -2,6 +2,16 @@
 
 A powerful, polite, and user-friendly web crawler and data extractor featuring a **modern visual dashboard** designed for non-technical users, powered by Scrapy and FastAPI.
 
+## Install on Windows
+
+1. Open the [latest release](https://github.com/addico786/website_crawler/releases/latest) and download **`WebsiteCrawler-windows.zip`** (not "Source code").
+2. Unzip the whole folder somewhere you keep programs, for example Documents or `C:\Apps`. Do not run it from inside the zip.
+3. Open the WebsiteCrawler folder and double-click `WebsiteCrawler.exe`.
+4. If Windows SmartScreen says "Windows protected your PC", click "More info", then "Run anyway". The app is not code-signed yet.
+5. The first start downloads the browser used for Render JavaScript (about 150-300 MB) in the background.
+
+Updates: press "Check for Updates" in the app; do not unzip a new version over the old one. Crawl results are kept in the `jobs` folder next to `WebsiteCrawler.exe`. To uninstall, delete the WebsiteCrawler folder (and `%LOCALAPPDATA%\ms-playwright`, the browser, unless another program uses Playwright). The same steps come in `HOW TO INSTALL.txt` inside the zip.
+
 ---
 
 ## What is new in 1.2.1

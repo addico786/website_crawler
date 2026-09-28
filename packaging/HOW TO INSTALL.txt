@@ -1,0 +1,29 @@
+Website Crawler for Windows: how to install
+============================================
+
+1. Unzip the whole WebsiteCrawler folder somewhere you keep programs,
+   for example Documents or C:\Apps. Do not run it from inside the zip.
+
+2. Open the WebsiteCrawler folder and double-click WebsiteCrawler.exe.
+
+3. If Windows SmartScreen says "Windows protected your PC", click
+   "More info", then "Run anyway". The app is not code-signed yet.
+
+4. The first start downloads the browser used for Render JavaScript
+   (about 150-300 MB) in the background. Crawls without Render JavaScript
+   work straight away.
+
+Updates
+   Press "Check for Updates" in the app. Do not unzip a new version over
+   the old one.
+
+Your crawl results
+   They are saved in the "jobs" folder inside the WebsiteCrawler folder,
+   next to WebsiteCrawler.exe (one folder per crawl). Updates keep them.
+
+Uninstall
+   Close the app and delete the WebsiteCrawler folder. This also deletes
+   your crawl results in its "jobs" folder, so copy that first if you want
+   to keep them. The browser for Render JavaScript is stored separately in
+   %LOCALAPPDATA%\ms-playwright; delete that folder too, unless another
+   program uses Playwright.
