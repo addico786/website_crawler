@@ -29,7 +29,7 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-VERSION = "1.1.1"  # Bump before tagging a release; the tag must be v<VERSION>.
+VERSION = "1.2.0"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
 UPDATE_URL = os.environ.get("CRAWLER_UPDATE_URL", f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
@@ -801,6 +801,12 @@ def install_update():
 
 
 # Mount Static Dashboard Frontend
+# The Windows registry can map .js to text/plain, and browsers refuse to run
+# ES modules (static/orbs.js) served that way; pin the types we ship.
+import mimetypes  # noqa: E402
+
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("font/woff2", ".woff2")
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 

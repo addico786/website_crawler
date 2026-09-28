@@ -50,3 +50,4 @@ browser_install.log
 # Old CLI crawl output (crawl.py --job <name>)
 adnan/
 amazon/
+.gstack/
