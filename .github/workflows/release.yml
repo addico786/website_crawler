@@ -30,6 +30,16 @@ jobs:
           version=$(sed -n 's/^VERSION = "\(.*\)".*/\1/p' server.py)
           [ "v$version" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} != v$version in server.py"; exit 1; }
 
+      # build_exe.bat builds the installer with Inno Setup 6, which the runner image may lack.
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if ((Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") -or (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            "Inno Setup is already installed."
+          } else {
+            choco install innosetup -y --no-progress
+          }
+
       - name: Build
         shell: cmd
         run: build_exe.bat
@@ -38,16 +48,19 @@ jobs:
         shell: bash
         run: |
           du -sh dist/WebsiteCrawler
-          ls -l dist/WebsiteCrawler-windows.zip
+          ls -l dist/WebsiteCrawler-windows.zip dist/WebsiteCrawler-Setup.exe
 
-      # The release is published only if the built app crawls the fixture site and serves the dashboard.
+      # The release is published only if the built app crawls the fixture site and serves the dashboard,
+      # and the installer installs a working app and uninstalls it.
       - name: Smoke test the built app
         run: python tests/smoke_frozen.py dist/WebsiteCrawler
 
       - uses: actions/upload-artifact@v4
         with:
           name: WebsiteCrawler-windows
-          path: dist/WebsiteCrawler-windows.zip
+          path: |
+            dist/WebsiteCrawler-windows.zip
+            dist/WebsiteCrawler-Setup.exe
           compression-level: 0
           retention-days: 14
 
@@ -65,5 +78,15 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/WebsiteCrawler-windows.zip
+          # The zip is what the in-app updater installs: keep its name and layout.
+          files: |
+            dist/WebsiteCrawler-Setup.exe
+            dist/WebsiteCrawler-windows.zip
+          # Shown above the generated change list: which file new users take.
+          body: |
+            **Download `WebsiteCrawler-Setup.exe` below and double-click it.**
+
+            If Windows shows "Windows protected your PC", click More info → Run anyway (the app is not code-signed yet).
+
+            Already installed? Use Check for Updates in the app.
           generate_release_notes: true

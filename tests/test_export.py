@@ -52,3 +52,22 @@ def test_csv_export_has_the_duplicate_and_text_source_columns():
         assert list(rows[0])[-1] == "text"  # the long column stays last
     finally:
         shutil.rmtree(job, ignore_errors=True)
+
+
+def test_csv_export_has_the_response_columns():
+    job = JOBS_DIR / "test_csv_response_columns"
+    job.mkdir(parents=True, exist_ok=True)
+    try:
+        new = {"url": "https://example.com/new", "status": 200, "text": "Body", "requested_url": "https://example.com/old",
+               "final_url": "https://example.com/new", "redirect_chain": ["https://example.com/old", "https://example.com/older"],
+               "response_bytes": 1234, "response_sha256": "cd" * 32, "rendered": False}
+        old = {"url": "https://example.com/a", "status": 200, "text": "Saved by 1.2.1"}  # no such fields
+        (job / "results.jsonl").write_text(json.dumps(new) + "\n" + json.dumps(old) + "\n", encoding="utf-8")
+        rows = list(csv.DictReader(io.StringIO(client.get("/api/jobs/test_csv_response_columns/export?format=csv").text)))
+        assert rows[0]["requested_url"] == "https://example.com/old" and rows[0]["final_url"] == "https://example.com/new"
+        assert rows[0]["redirect_chain"] == "https://example.com/old -> https://example.com/older"
+        assert rows[0]["response_bytes"] == "1234" and rows[0]["response_sha256"] == "cd" * 32 and rows[0]["rendered"] == "False"
+        assert rows[1]["requested_url"] == rows[1]["redirect_chain"] == rows[1]["response_sha256"] == ""
+        assert list(rows[0])[-1] == "text"
+    finally:
+        shutil.rmtree(job, ignore_errors=True)

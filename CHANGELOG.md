@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.2.2 (2026-09-28)
+
+Sites that send the same page for every address (`docs/PLAN-1.2.2.md`). textifydigitals.com's
+server answers every path, even a made-up one, with status 200 and the same pre-rendered home
+page; the real page only appears once the site's JavaScript runs. Every page was saved as a copy
+of the home page.
+
+Crawler
+- Render JavaScript waits until the page stops loading data (at most 10 s) before saving it, so an
+  app that draws the page after the load event is no longer saved mid-redraw.
+- Before the first page, the crawl asks for a made-up address (`/__websitecrawler_check_<8 hex>`):
+  no row, not counted toward the page cap, never followed or reported as a broken link. When the
+  start page comes back 200 with exactly the same bytes, the log says "This site answers every
+  address with the same page (a single-page app).", `summary.json` gets `site_notes:
+  ["same_page_for_every_address"]`, and the crawl switches to Render JavaScript on its own. If the
+  browser is missing, it goes on without it and says pages will look the same. A resumed job keeps
+  the check and the decision (both in `summary.json`).
+- Rows whose bytes are the made-up address's, or another saved page's, are marked
+  `suspicious: "SAME_RESPONSE"`; the Result line ends with `S suspicious (same page for different
+  addresses)`.
+- When at least 3 pages, and at least half of them, name the home page as their canonical, the log
+  says so (a fault of the site) and `site_notes` gets `canonical_to_home`.
+- Every row records what was asked for and what came back: `requested_url`, `final_url`,
+  `redirect_chain`, `response_bytes`, `response_sha256` (for a rendered page, of the rendered HTML)
+  and `rendered`. The CSV export has the same columns.
+
+Dashboard
+- A job that found one page for every address and did not render shows: "This site sends the same
+  page for every address. Turn on Render JavaScript."
+
+Windows app
+- A real installer, `WebsiteCrawler-Setup.exe` (Inno Setup): per user, no admin prompt, into
+  `%LOCALAPPDATA%\Programs\WebsiteCrawler`; Start-menu and desktop shortcuts; an uninstaller in Apps
+  & features that asks before deleting crawl results. The release notes open with which file to
+  download. `WebsiteCrawler-windows.zip` is unchanged and is still what "Check for Updates" installs.
+- The pull-request build installs the app silently, starts it and uninstalls it.
+
 ## 1.2.1 (2026-09-28)
 
 The crawler fixes planned as 1.1.2 (`docs/PLAN-1.1.2.md`), on top of the 1.2.0 redesign.

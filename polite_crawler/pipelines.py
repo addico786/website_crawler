@@ -7,7 +7,7 @@ from pathlib import Path
 from scrapy import signals
 from scrapy.exceptions import DropItem
 
-from polite_crawler.textblocks import find_boilerplate, write_boilerplate
+from polite_crawler.textblocks import find_boilerplate, write_boilerplate, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,20 @@ def read_rows(path):
                 except ValueError:
                     continue
     return rows
+
+
+def read_summary(job_dir):
+    """The job's summary.json (from an earlier run, or this one so far); {} when there is none."""
+    try:
+        summary = json.loads((Path(job_dir) / "summary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def update_summary(job_dir, fields):
+    """Set some fields of summary.json now, keeping the rest."""
+    write_json(Path(job_dir) / "summary.json", {**read_summary(job_dir), **fields})
 
 
 class JobOutputPipeline:
@@ -68,6 +82,11 @@ class JobOutputPipeline:
             if key.startswith("downloader/response_status_count/")
         }
         traps = getattr(spider, "traps", None)
+        site_state = spider.site_state() if hasattr(spider, "site_state") else {}
+        home_canonicals = spider.canonical_to_home(rows) if hasattr(spider, "canonical_to_home") else 0
+        if home_canonicals:  # search engines may fold these pages into the home page
+            logger.warning("%d pages name the home page as their canonical (a site problem)", home_canonicals)
+            site_state["site_notes"].append("canonical_to_home")
         # What the owner sees: the job's pages and how much redundancy was marked or removed.
         result = {
             "pages": len(rows),
@@ -75,10 +94,12 @@ class JobOutputPipeline:
             "near_duplicates": sum(1 for row in rows if row.get("near_duplicate_of")),
             "boilerplate_blocks": len(blocks),
             "trap_urls_skipped": sum(traps.skipped.values()) if traps else 0,
+            "suspicious": sum(1 for row in rows if row.get("suspicious")),
         }
         logger.info(
             "Result: %(pages)d pages, %(duplicates)d duplicates, %(near_duplicates)d near duplicates, "
-            "%(boilerplate_blocks)d boilerplate blocks, %(trap_urls_skipped)d trap URLs skipped",
+            "%(boilerplate_blocks)d boilerplate blocks, %(trap_urls_skipped)d trap URLs skipped, "
+            "%(suspicious)d suspicious (same page for different addresses)",
             result,
         )
         summary = {
@@ -96,8 +117,8 @@ class JobOutputPipeline:
             # Trap URLs not requested, by rule, and large URL families worth a look.
             "skipped": dict(traps.skipped) if traps else {},
             "suspected_traps": traps.suspected() if traps else [],
+            # The made-up address checked first, what it says about the site, and whether pages were rendered.
+            **site_state,
             "results_file": "results.jsonl",
         }
-        (self.job_dir / "summary.json").write_text(
-            json.dumps(summary, indent=2) + "\n", encoding="utf-8"
-        )
+        write_json(self.job_dir / "summary.json", summary)

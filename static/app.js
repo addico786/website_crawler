@@ -28,6 +28,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const currentJobStatus = document.getElementById("current-job-status");
   const currentJobJsPill = document.getElementById("current-job-js-pill");
   const currentJobUrl = document.getElementById("current-job-url");
+  const currentJobNote = document.getElementById("current-job-note");
   const btnStopJob = document.getElementById("btn-stop-job");
   const btnDeleteJob = document.getElementById("btn-delete-job");
   const btnToggleLog = document.getElementById("btn-toggle-log");
@@ -240,6 +241,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // The crawler found one page sent for every address and could not render the real ones.
+  function renderSiteNote(summary) {
+    const notes = (summary && summary.site_notes) || [];
+    currentJobNote.style.display = notes.includes("same_page_for_every_address") && !summary.render_js ? "" : "none";
+  }
+
   async function selectJob(jobId) {
     currentJobId = jobId;
     currentPage = 1;
@@ -268,6 +275,7 @@ document.addEventListener("DOMContentLoaded", () => {
       jobStatWords.textContent = (data.total_words || 0).toLocaleString();
       jobStatLinks.textContent = (data.total_links || 0).toLocaleString();
       jobStatRequests.textContent = data.summary?.requests_sent || 0;
+      renderSiteNote(data.summary);
 
       if (data.status === "running") {
         btnStopJob.style.display = "inline-flex";
@@ -880,6 +888,7 @@ document.addEventListener("DOMContentLoaded", () => {
         .then((data) => {
           if (polledJob !== currentJobId) return; // another job was selected meanwhile
           renderCurrentStatus(data.status);
+          renderSiteNote(data.summary);
           // Refresh the results while the job runs, and once more after it stops.
           if (data.status === "running" || liveResultsJob === polledJob) fetchJobResults(true);
           liveResultsJob = data.status === "running" ? polledJob : null;

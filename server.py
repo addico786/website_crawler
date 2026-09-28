@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 
 from polite_crawler.textblocks import load_boilerplate, strip_boilerplate
 
-VERSION = "1.2.1"  # Bump before tagging a release; the tag must be v<VERSION>.
+VERSION = "1.2.2"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
 UPDATE_URL = os.environ.get("CRAWLER_UPDATE_URL", f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
@@ -698,6 +698,12 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
         "content_hash",
         "duplicate_of",
         "near_duplicate_of",
+        "requested_url",
+        "final_url",
+        "redirect_chain",
+        "response_bytes",
+        "response_sha256",
+        "rendered",
         "text",
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
@@ -707,6 +713,8 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
         row = dict(item)
         if isinstance(row.get("headings"), list):
             row["headings"] = " | ".join(row["headings"])
+        if isinstance(row.get("redirect_chain"), list):
+            row["redirect_chain"] = " -> ".join(row["redirect_chain"])
         writer.writerow({key: csv_cell(value) for key, value in row.items()})
 
     return Response(

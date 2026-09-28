@@ -1,5 +1,6 @@
 """Shared helpers for crawl tests: serve a site on 127.0.0.1 and run crawl.py against it."""
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -34,13 +35,14 @@ def fixture_site():
 
 @pytest.fixture
 def crawl(tmp_path):
-    """crawl(seed, *crawl_py_args) runs one crawl to the end and returns its rows."""
-    def run(seed, *args, job=None):
+    """crawl(seed, *crawl_py_args) runs one crawl to the end and returns its rows. env: extra variables."""
+    def run(seed, *args, job=None, env=None):
         job = Path(job or tmp_path / "job")
         job.mkdir(parents=True, exist_ok=True)
         command = [sys.executable, str(ROOT / "crawl.py"), seed, "--job", str(job), "--delay", "0", "--minutes", "2", *args]
         with open(job / "job.log", "a", encoding="utf-8") as log:
-            subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, timeout=240, check=True)
+            subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, timeout=240, check=True,
+                           env={**os.environ, **env} if env else None)
         results = job / "results.jsonl"
         if not results.exists():
             return []

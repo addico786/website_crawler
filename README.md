@@ -2,13 +2,22 @@
 
 A powerful, polite, and user-friendly web crawler and data extractor featuring a **modern visual dashboard** designed for non-technical users, powered by Scrapy and FastAPI.
 
+## Install on Windows
+
+**Download [`WebsiteCrawler-Setup.exe`](https://github.com/addico786/website_crawler/releases/latest) and double-click it.**
+
+If Windows shows "Windows protected your PC", click More info → Run anyway (the app is not code-signed yet).
+
+Already installed? Use Check for Updates in the app.
+
 ---
 
-## What is new in 1.2.1
+## What is new in 1.2.2
 
-- **Less redundant data**: the main text of each page comes from trafilatura, so listing pages keep all their items; text repeated across most pages (banners, side blocks) is found once per job and left out of the dashboard and exports; URL variants and `rel=canonical` twins are fetched once; exact and near-duplicate pages are marked; endless calendars and loops are skipped; a page cap of 30 saves exactly 30 pages.
-- **A result line** at the end of every crawl: pages, duplicates, near duplicates, boilerplate blocks and trap URLs skipped (also in `summary.json`).
-- **Safer**: the dashboard refuses other sites' requests, updates are installed only when their sha256 matches the digest GitHub publishes, and CSV exports cannot run spreadsheet formulas.
+- **Sites that send the same page for every address** (apps that draw each page in the browser): the crawler notices, switches to Render JavaScript by itself and saves each page's own text. Before, every page came out as a copy of the home page.
+- **Render JavaScript waits for the page to settle** before saving it.
+- **Clearer results**: each row says what was asked for and what came back (redirects, size, sha256, rendered or not); the Result line counts suspicious pages; sites whose pages all name the home page as canonical are reported.
+- **A Windows installer**, `WebsiteCrawler-Setup.exe`: per user, no admin prompt, with shortcuts and an uninstaller.
 
 Full list: [CHANGELOG.md](CHANGELOG.md).
 
@@ -36,11 +45,10 @@ Full list: [CHANGELOG.md](CHANGELOG.md).
 ## 🚀 Quick Start (For Non-Technical Users)
 
 ### Option A: Windows App (no Python needed)
-1. Download `WebsiteCrawler-windows.zip` from the latest [GitHub Release](https://github.com/addico786/website_crawler/releases/latest).
-2. Unzip it anywhere you can write to (e.g. Desktop or Documents — not `Program Files`).
-3. Double-click **`WebsiteCrawler.exe`**. The dashboard opens in its own window (Edge WebView2, built into Windows 10/11). Closing the window quits the app and stops any running crawls.
+1. Download `WebsiteCrawler-Setup.exe` from the latest [GitHub Release](https://github.com/addico786/website_crawler/releases/latest) and double-click it. It installs for your Windows user only (no admin prompt) into `%LOCALAPPDATA%\Programs\WebsiteCrawler`, with a Start-menu shortcut and, if you keep it ticked, a desktop shortcut. If SmartScreen says "Windows protected your PC", click More info → Run anyway (the app is not code-signed yet).
+2. Open **Website Crawler**. The dashboard opens in its own window (Edge WebView2, built into Windows 10/11). Closing the window quits the app and stops any running crawls.
 
-Your crawl data is stored in the `jobs` folder next to the `.exe`. The first launch downloads Chromium (~150 MB) in the background for "Render JavaScript" crawls.
+Your crawl data is stored in the `jobs` folder inside the install folder, next to `WebsiteCrawler.exe`. The first launch downloads Chromium (about 150-300 MB) in the background for "Render JavaScript" crawls, into `%LOCALAPPDATA%\ms-playwright`. To uninstall, use Apps & features (Settings → Apps); it asks before deleting your crawl results. The release also carries `WebsiteCrawler-windows.zip`, the same app without an installer: that is what **Check for Updates** downloads.
 
 **Updates:** click **Check for Updates** at the bottom of the dashboard. If a newer version exists, the app downloads it, checks its sha256 against the digest GitHub publishes for the release, restarts itself, and the page reloads. Without a matching digest it installs nothing and offers the release page instead. Your `jobs` folder is kept. Stop any running crawls first.
 
@@ -111,12 +119,12 @@ The app is packaged with [PyInstaller](https://pyinstaller.org/) (`--onedir`). P
 ```bat
 build_exe.bat
 ```
-This creates `dist\WebsiteCrawler\WebsiteCrawler.exe` and `dist\WebsiteCrawler-windows.zip`. The build is defined in `WebsiteCrawler.spec`: the window app plus `WebsiteCrawlerWorker.exe`, a console twin that runs crawls hidden so no console windows pop up.
+This creates `dist\WebsiteCrawler\WebsiteCrawler.exe`, `dist\WebsiteCrawler-windows.zip` and, when [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed, the installer `dist\WebsiteCrawler-Setup.exe` (`installer\WebsiteCrawler.iss`, given `VERSION` from `server.py`). The build is defined in `WebsiteCrawler.spec`: the window app plus `WebsiteCrawlerWorker.exe`, a console twin that runs crawls hidden so no console windows pop up.
 
 To publish an update that users receive through **Check for Updates**:
 1. Bump `VERSION` in `server.py` (e.g. `1.2.1`), add it to `CHANGELOG.md`, and commit.
 2. Tag and push: `git tag v1.2.1 && git push origin v1.2.1`.
-3. The GitHub Actions workflow (`.github/workflows/release.yml`) builds on Windows, smoke-tests the built app, and only then publishes `WebsiteCrawler-windows.zip` as a Release. The updater installs only an asset of that exact name, with a sha256 digest (GitHub adds it to release assets).
+3. The GitHub Actions workflow (`.github/workflows/release.yml`) builds on Windows, smoke-tests the built app and the installer (silent install, start, uninstall), and only then publishes `WebsiteCrawler-Setup.exe` and `WebsiteCrawler-windows.zip` as a Release. The updater installs only the zip, by that exact name, with a sha256 digest (GitHub adds it to release assets).
 
 The updater reads `https://api.github.com/repos/<UPDATE_REPO>/releases/latest` (`UPDATE_REPO` in `server.py`), so the repository must be **public**. Drafts and pre-releases are ignored. If the source repo is private, publish the release zips to a separate public repo and point `UPDATE_REPO` at it.
 
@@ -147,6 +155,7 @@ website_crawler/
 ├── start_dashboard.sh    # 1-Click Linux/WSL launcher script
 ├── build_exe.bat         # Builds the Windows app with PyInstaller
 ├── WebsiteCrawler.spec   # PyInstaller build: window app + hidden crawl worker
+├── installer/            # Inno Setup script for WebsiteCrawler-Setup.exe
 ├── .github/workflows/    # Tests on Linux; Windows build + smoke on PRs; tag v* -> GitHub Release
 ├── tests/                # Crawler, dashboard guard, export and updater tests; fixture site
 ├── test_smoke.py         # Automated smoke & API unit tests
