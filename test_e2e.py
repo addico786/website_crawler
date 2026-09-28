@@ -196,7 +196,7 @@ def test_stop_job(mock_server):
     assert start_res.status_code == 200
 
     # Trigger stop immediately
-    stop_res = client.post(f"/api/jobs/{job_name}/stop")
+    stop_res = client.post(f"/api/jobs/{job_name}/stop", json={})
     assert stop_res.status_code == 200
     assert stop_res.json()["status"] == "success"
 

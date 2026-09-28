@@ -16,6 +16,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
+from urllib.parse import urlsplit
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -25,7 +26,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -55,6 +56,40 @@ app = FastAPI(
     description="Backend API for managing Scrapy web crawler jobs, monitoring progress, and viewing results.",
     version=VERSION,
 )
+
+# The dashboard listens on this computer only, but any web page open in the browser can
+# still send it requests. Names other than these are refused (DNS rebinding), and so are
+# writes from other sites: a cross-site form or fetch cannot send JSON without a preflight.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"} | ({os.environ["HOST"].lower()} if os.environ.get("HOST") else set())
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def host_and_port(url: str):
+    try:
+        parts = urlsplit(url)
+        return parts.scheme, parts.hostname, parts.port
+    except ValueError:  # e.g. a port that is not a number
+        return None, None, None
+
+
+@app.middleware("http")
+async def guard_requests(request: Request, call_next):
+    _, hostname, port = host_and_port("//" + request.headers.get("host", ""))
+    if hostname not in ALLOWED_HOSTS:
+        return JSONResponse({"detail": "Unknown host."}, status_code=400)
+    if request.method in WRITE_METHODS and request.url.path.startswith("/api/"):
+        fetch_site = request.headers.get("sec-fetch-site")
+        origin = request.headers.get("origin")
+        origin_scheme, origin_host, origin_port = host_and_port(origin or "")
+        content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if (
+            (fetch_site is not None and fetch_site not in ("same-origin", "none"))
+            or (origin is not None and (origin_scheme != "http" or origin_host not in ALLOWED_HOSTS or origin_port != port))
+            or content_type != "application/json"
+        ):
+            return JSONResponse({"detail": "Cross-site or non-JSON request refused."}, status_code=403)
+    return await call_next(request)
+
 
 # Active Process Tracker: job_id -> Popen process object
 active_processes: Dict[str, subprocess.Popen] = {}
@@ -798,6 +833,15 @@ def install_update():
     )
     threading.Timer(1.0, os._exit, [0]).start()  # let this response reach the browser first
     return {"status": "success", "message": f"Installing v{info['latest_version']}; the dashboard will restart."}
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+def index_page():
+    # After an update the page must load the new app.js and app.css, not the browser's cached copies.
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = re.sub(r'"/(app\.(?:js|css))"', rf'"/\1?v={VERSION}"', html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 # Mount Static Dashboard Frontend

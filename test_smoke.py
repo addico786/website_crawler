@@ -61,19 +61,19 @@ def test_delete_job_endpoint():
     (job_dir / "results.jsonl").write_text('{"url": "https://example.com"}\n', encoding="utf-8")
     assert job_dir.exists()
 
-    res = client.delete("/api/jobs/temp_delete_smoke_job")
+    res = client.request("DELETE", "/api/jobs/temp_delete_smoke_job", json={})
     assert res.status_code == 200
     assert res.json()["status"] == "success"
     assert not job_dir.exists()
 
     # Deleting non-existent job returns 404
-    res_404 = client.delete("/api/jobs/temp_delete_smoke_job")
+    res_404 = client.request("DELETE", "/api/jobs/temp_delete_smoke_job", json={})
     assert res_404.status_code == 404
 
 
 def test_job_id_cannot_escape_jobs_dir():
     assert client.get("/api/jobs/%2E%2E").status_code == 404
-    assert client.delete("/api/jobs/%2E%2E").status_code == 404
+    assert client.request("DELETE", "/api/jobs/%2E%2E", json={}).status_code == 404
 
 
 def test_spider_stays_on_exact_host():
@@ -97,7 +97,7 @@ def test_update_check(monkeypatch):
 
     release["tag_name"] = f"v{server.VERSION}"
     assert client.get("/api/update/check").json()["update_available"] is False
-    assert client.post("/api/update/install").status_code == 400  # not the packaged Windows app
+    assert client.post("/api/update/install", json={}).status_code == 400  # not the packaged Windows app
 
 
 def test_spider_link_rules():
