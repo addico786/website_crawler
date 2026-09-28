@@ -638,6 +638,13 @@ async def stream_job_logs(job_id: str, request: Request):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+def csv_cell(value):
+    # A crawled page's title like "=HYPERLINK(...)" would run as a formula in Excel or Sheets.
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + value
+    return value
+
+
 @app.get("/api/jobs/{job_id}/export")
 def export_job_results(job_id: str, format: str = Query(default="csv")):
     job_path = get_job_path(job_id)
@@ -684,7 +691,7 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
         row = dict(item)
         if isinstance(row.get("headings"), list):
             row["headings"] = " | ".join(row["headings"])
-        writer.writerow(row)
+        writer.writerow({key: csv_cell(value) for key, value in row.items()})
 
     return Response(
         content=output.getvalue(),
