@@ -1,6 +1,7 @@
 import asyncio
 import ctypes
 import csv
+import hashlib
 import io
 import json
 import os
@@ -16,6 +17,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
+from urllib.parse import urlsplit
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -25,14 +27,19 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-VERSION = "1.2.0"  # Bump before tagging a release; the tag must be v<VERSION>.
+from polite_crawler.textblocks import load_boilerplate, strip_boilerplate
+
+VERSION = "1.2.1"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
 UPDATE_URL = os.environ.get("CRAWLER_UPDATE_URL", f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
+# The one release asset the updater installs: a zip whose top folder holds WebsiteCrawler.exe,
+# WebsiteCrawlerWorker.exe and _internal/ (1.1.1 took the first .zip; keep exactly one).
+UPDATE_ASSET = "WebsiteCrawler-windows.zip"
 
 # Base Directory & Paths. In the packaged .exe (PyInstaller), bundled files live in
 # sys._MEIPASS while jobs/ sits next to the .exe so it survives updates.
@@ -55,6 +62,40 @@ app = FastAPI(
     description="Backend API for managing Scrapy web crawler jobs, monitoring progress, and viewing results.",
     version=VERSION,
 )
+
+# The dashboard listens on this computer only, but any web page open in the browser can
+# still send it requests. Names other than these are refused (DNS rebinding), and so are
+# writes from other sites: a cross-site form or fetch cannot send JSON without a preflight.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"} | ({os.environ["HOST"].lower()} if os.environ.get("HOST") else set())
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def host_and_port(url: str):
+    try:
+        parts = urlsplit(url)
+        return parts.scheme, parts.hostname, parts.port
+    except ValueError:  # e.g. a port that is not a number
+        return None, None, None
+
+
+@app.middleware("http")
+async def guard_requests(request: Request, call_next):
+    _, hostname, port = host_and_port("//" + request.headers.get("host", ""))
+    if hostname not in ALLOWED_HOSTS:
+        return JSONResponse({"detail": "Unknown host."}, status_code=400)
+    if request.method in WRITE_METHODS and request.url.path.startswith("/api/"):
+        fetch_site = request.headers.get("sec-fetch-site")
+        origin = request.headers.get("origin")
+        origin_scheme, origin_host, origin_port = host_and_port(origin or "")
+        content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if (
+            (fetch_site is not None and fetch_site not in ("same-origin", "none"))
+            or (origin is not None and (origin_scheme != "http" or origin_host not in ALLOWED_HOSTS or origin_port != port))
+            or content_type != "application/json"
+        ):
+            return JSONResponse({"detail": "Cross-site or non-JSON request refused."}, status_code=403)
+    return await call_next(request)
+
 
 # Active Process Tracker: job_id -> Popen process object
 active_processes: Dict[str, subprocess.Popen] = {}
@@ -91,6 +132,27 @@ def get_job_path(job_id: str) -> Path:
     if path.parent != JOBS_DIR:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return path
+
+
+def load_items(job_path: Path) -> list:
+    """A job's rows, with its site-wide boilerplate (boilerplate.json) taken out of each text
+    and word_count recomputed. results.jsonl itself keeps the full text."""
+    results_file = job_path / "results.jsonl"
+    if not results_file.exists():
+        return []
+    blocks = load_boilerplate(job_path)
+    items = []
+    with open(results_file, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                item = json.loads(line)
+            except ValueError:  # blank, or a line the crawler is still writing
+                continue
+            if blocks and item.get("text"):
+                item["text"] = strip_boilerplate(item["text"], blocks)
+                item["word_count"] = len(item["text"].split())
+            items.append(item)
+    return items
 
 
 def pid_exists(pid: int) -> bool:
@@ -452,7 +514,6 @@ def get_job_detail(job_id: str):
     status = get_job_status(job_id)
     summary_file = job_path / "summary.json"
     pid_file = job_path / "pid.json"
-    results_file = job_path / "results.jsonl"
     log_file = job_path / "job.log"
 
     summary_data = {}
@@ -472,18 +533,13 @@ def get_job_detail(job_id: str):
     pages_saved = 0
     total_words = 0
     total_links = 0
-    if results_file.exists():
-        try:
-            with open(results_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    item = json.loads(line)
-                    pages_saved += 1
-                    total_words += item.get("word_count", 0)
-                    total_links += item.get("links_found", 0)
-        except Exception:
-            pass
+    try:
+        for item in load_items(job_path):
+            pages_saved += 1
+            total_words += item.get("word_count", 0)
+            total_links += item.get("links_found", 0)
+    except Exception:
+        pass
 
     recent_logs = ""
     if log_file.exists():
@@ -524,34 +580,29 @@ def get_job_results(
     matched_items = []
 
     try:
-        with open(results_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
+        for item in load_items(job_path):
+            # Apply status_code filter
+            if status_code is not None and item.get("status") != status_code:
+                continue
+
+            # Apply search filter
+            if search_query:
+                url = item.get("url", "").lower()
+                title = item.get("title", "").lower()
+                desc = item.get("description", "").lower()
+                text = item.get("text", "").lower()
+                headings = " ".join(item.get("headings", [])).lower()
+
+                if (
+                    search_query not in url
+                    and search_query not in title
+                    and search_query not in desc
+                    and search_query not in text
+                    and search_query not in headings
+                ):
                     continue
-                item = json.loads(line)
-                
-                # Apply status_code filter
-                if status_code is not None and item.get("status") != status_code:
-                    continue
 
-                # Apply search filter
-                if search_query:
-                    url = item.get("url", "").lower()
-                    title = item.get("title", "").lower()
-                    desc = item.get("description", "").lower()
-                    text = item.get("text", "").lower()
-                    headings = " ".join(item.get("headings", [])).lower()
-
-                    if (
-                        search_query not in url
-                        and search_query not in title
-                        and search_query not in desc
-                        and search_query not in text
-                        and search_query not in headings
-                    ):
-                        continue
-
-                matched_items.append(item)
+            matched_items.append(item)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading job results: {str(e)}")
 
@@ -603,6 +654,13 @@ async def stream_job_logs(job_id: str, request: Request):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+def csv_cell(value):
+    # A crawled page's title like "=HYPERLINK(...)" would run as a formula in Excel or Sheets.
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + value
+    return value
+
+
 @app.get("/api/jobs/{job_id}/export")
 def export_job_results(job_id: str, format: str = Query(default="csv")):
     job_path = get_job_path(job_id)
@@ -610,12 +668,8 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
     if not results_file.exists():
         raise HTTPException(status_code=404, detail=f"No results found for job '{job_id}'.")
 
-    items = []
     try:
-        with open(results_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    items.append(json.loads(line))
+        items = load_items(job_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read results: {str(e)}")
 
@@ -640,6 +694,10 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
         "headings",
         "crawled_at",
         "found_on",
+        "text_source",
+        "content_hash",
+        "duplicate_of",
+        "near_duplicate_of",
         "text",
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
@@ -649,7 +707,7 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
         row = dict(item)
         if isinstance(row.get("headings"), list):
             row["headings"] = " | ".join(row["headings"])
-        writer.writerow(row)
+        writer.writerow({key: csv_cell(value) for key, value in row.items()})
 
     return Response(
         content=output.getvalue(),
@@ -674,18 +732,13 @@ def get_global_stats():
                 if is_job_running(job_id):
                     active_jobs += 1
 
-                results_file = item / "results.jsonl"
-                if results_file.exists():
-                    try:
-                        with open(results_file, "r", encoding="utf-8") as f:
-                            for line in f:
-                                if line.strip():
-                                    data = json.loads(line)
-                                    total_pages += 1
-                                    total_words += data.get("word_count", 0)
-                                    total_links += data.get("links_found", 0)
-                    except Exception:
-                        pass
+                try:
+                    for data in load_items(item):
+                        total_pages += 1
+                        total_words += data.get("word_count", 0)
+                        total_links += data.get("links_found", 0)
+                except Exception:
+                    pass
 
     return {
         "total_jobs": total_jobs,
@@ -732,16 +785,52 @@ def check_for_update():
         raise HTTPException(status_code=502, detail=f"Could not reach GitHub: {e}")
 
     latest = release.get("tag_name", "").lstrip("v")
-    zips = [a["browser_download_url"] for a in release.get("assets", []) if a.get("name", "").endswith(".zip")]
+    asset = next((a for a in release.get("assets", []) if a.get("name") == UPDATE_ASSET), {})
+    # GitHub publishes each asset's sha256 as "sha256:<hex>". Without one the download can't be
+    # checked, so only the release page is offered.
+    digest = asset.get("digest") or ""
+    sha256 = digest[len("sha256:"):].lower() if digest.startswith("sha256:") else None
     return {
         "current_version": VERSION,
         "latest_version": latest,
         "update_available": parse_version(latest) > parse_version(VERSION),
         "release_url": release.get("html_url"),
-        "download_url": zips[0] if zips else None,
+        "download_url": asset.get("browser_download_url") if sha256 else None,
+        "sha256": sha256,
         "notes": release.get("body") or "",
         "can_self_update": get_version()["can_self_update"],
     }
+
+
+def download_update(url: str, sha256: str, staging: Path, exe_name: str) -> Path:
+    """Download the release zip into staging/, check its sha256, unpack it; returns the folder holding exe_name."""
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir()
+    archive = staging / "update.zip"
+    try:
+        digest = hashlib.sha256()
+        request = urllib.request.Request(url, headers={"User-Agent": f"WebsiteCrawler/{VERSION}"})
+        with urllib.request.urlopen(request, timeout=300) as response, open(archive, "wb") as out:
+            while chunk := response.read(1024 * 1024):
+                digest.update(chunk)
+                out.write(chunk)
+        if digest.hexdigest() != sha256:
+            raise ValueError("the file's checksum does not match the one published with the release")
+        target = (staging / "new").resolve()
+        with zipfile.ZipFile(archive) as zf:
+            for name in zf.namelist():
+                if not (target / name).resolve().is_relative_to(target):
+                    raise ValueError(f"the package has an entry outside its folder: {name}")
+            zf.extractall(target)
+    except Exception as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise HTTPException(status_code=502, detail=f"Failed to download update: {e}")
+
+    found = list((staging / "new").rglob(exe_name))
+    if not found:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise HTTPException(status_code=502, detail=f"Update package has no {exe_name}.")
+    return found[0].parent
 
 
 @app.post("/api/update/install")
@@ -756,25 +845,8 @@ def install_update():
         raise HTTPException(status_code=400, detail="No downloadable update available.")
 
     staging = BASE_DIR / "_update"
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir()
-    archive = staging / "update.zip"
-    try:
-        request = urllib.request.Request(info["download_url"], headers={"User-Agent": f"WebsiteCrawler/{VERSION}"})
-        with urllib.request.urlopen(request, timeout=300) as response, open(archive, "wb") as out:
-            shutil.copyfileobj(response, out)
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(staging / "new")
-    except Exception as e:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise HTTPException(status_code=502, detail=f"Failed to download update: {e}")
-
     exe = Path(sys.executable)
-    found = list((staging / "new").rglob(exe.name))
-    if not found:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise HTTPException(status_code=502, detail=f"Update package has no {exe.name}.")
-    new_dir = found[0].parent
+    new_dir = download_update(info["download_url"], info["sha256"], staging, exe.name)
 
     # A running .exe can't overwrite itself: hand off to a script that waits for this
     # process to exit, swaps the files (jobs/ is left alone), and starts the new version.
@@ -798,6 +870,15 @@ def install_update():
     )
     threading.Timer(1.0, os._exit, [0]).start()  # let this response reach the browser first
     return {"status": "success", "message": f"Installing v{info['latest_version']}; the dashboard will restart."}
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+def index_page():
+    # After an update the page must load the new app.js, app.css and orbs.js, not the browser's cached copies.
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = re.sub(r'"/((?:app|orbs)\.(?:js|css))"', rf'"/\1?v={VERSION}"', html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 # Mount Static Dashboard Frontend

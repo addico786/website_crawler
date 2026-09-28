@@ -85,3 +85,116 @@ created. Tag v1.1.2 only after CI and the Windows workflow's smoke crawl pass.
 ## Not in this version
 The Slush redesign and orbs (1.2.0); the SEO audit report, structured data, contacts,
 JavaScript shell detection (1.3.0); full update signing (owner key).
+
+---
+
+## Supervisor review (2026-09-28): required changes, binding
+
+Verdict: ship with changes. Where these differ from the sections above, these win.
+Baseline: the 14 existing tests pass.
+
+Facts found in the code: app.py probes `/api/version` to detect a running app (a
+401 would read as "port in use"); exports use `window.location.href` and logs use
+`EventSource` (no headers possible); 1.1.1's updater takes the first `.zip` asset,
+finds the exe by rglob, copies `_internal` (/MIR) and `*.exe`, honours
+`CRAWLER_UPDATE_URL`; the server re-reads results.jsonl on every poll (so
+`os.replace` over it fails on Windows); AutoThrottle's `mindelay` resets
+`slot.delay` after each 200; DepthMiddleware drops silently; there are no PyInstaller
+hooks for trafilatura, justext, courlan, htmldate or tld.
+
+1. Dashboard guard (replaces the token idea). No token. One middleware on every
+   request: 400 unless Host's hostname is 127.0.0.1 or localhost (or `HOST` if set);
+   port not checked. For POST/PUT/PATCH/DELETE under /api/: 403 when Sec-Fetch-Site
+   is present and not same-origin/none, when Origin is present and not
+   http://<allowed host>:<port>, or when Content-Type is not application/json.
+   app.js sends `Content-Type: application/json` and `{}` on stop, delete, install.
+   GETs (results, export, SSE, /api/version) need only the Host check. index.html is
+   served with `Cache-Control: no-store` and loads `/app.js?v=<VERSION>`. Tests use
+   `TestClient(app, base_url="http://127.0.0.1:8000")`.
+2. Boilerplate: never rewrite results.jsonl. It stays append-only; text is stored one
+   block per `\n` line (trafilatura and fallback). At spider close read the whole file
+   (resumes count), take blocks on >= 50% of pages with text (min 5 pages), write
+   boilerplate.json via temp file + os.replace (retry on PermissionError). The server
+   strips those blocks when reading, through one `load_items()` used by results,
+   detail, export and overview, which also recomputes word_count. Missing or bad
+   boilerplate.json means raw text. Shared code in `polite_crawler/textblocks.py`
+   (no Scrapy import).
+3. URL normalisation builds the dedupe key only. Requests go to the URL as found,
+   minus tracking params and session ids (`jsessionid`, `phpsessid`, `sessionid`,
+   `;jsessionid=`, and `sid` only when its value is 32 hex chars). Key: lowercase
+   scheme and host, drop leading `www.`, default port, fragment; sort query; strip one
+   trailing slash (not root); drop a final index.html/htm/php; keep path case. Skip a
+   link whose key is already saved or requested. rel=canonical: if in scope with a
+   different key, request it normally; the page keeps its text and links; no new field.
+4. Conservative traps. Skip before requesting, counted in `skipped.<rule>`: the same
+   segment 3+ times in a row or any segment more than 3 times; more than 20 segments;
+   a date in the last path segments or in a date/month/year/day query value more than
+   12 months in the future (past dates never skipped); `page`/`paged`/`pg` query
+   values or /page/N above 500. Do not follow links from an exact duplicate.
+   Per-template and per-parameter budgets are only reported (`suspected_traps` with
+   template, count, 3 examples), not enforced.
+5. Duplicates. `content_hash` only when word_count >= 50, else null. Near-duplicates:
+   64-bit SimHash over 3-word shingles, Hamming distance <= 3, found through 4
+   exact-match 16-bit bands; no all-pairs scan, no stored shingles, no Jaccard. Marker
+   only. Spider init rebuilds saved keys, hashes, bands and row count from
+   results.jsonl.
+6. Hard cap = rows in the job's results.jsonl (earlier runs and 4xx/5xx rows count).
+   The spider counts rows it yields from the existing count; at the cap it yields
+   nothing more and raises CloseSpider('page_cap') after the row that reaches it; the
+   pipeline drops rows beyond it. No in-flight counting. CLOSESPIDER_ITEMCOUNT stays
+   as backstop. Test: 100-page fixture, cap 30, concurrency 8 -> exactly 30;
+   render_js -> <= 30.
+7. Updater contract: exactly one .zip asset, `WebsiteCrawler-windows.zip`, top folder
+   with WebsiteCrawler.exe, WebsiteCrawlerWorker.exe, `_internal/` (all new files live
+   in `_internal`). 1.1.2 picks the asset by name, hashes while downloading, compares
+   with `digest` (strip `sha256:`). No digest -> /api/update/check returns
+   `download_url: null` and the UI offers the release page. Before tagging, test the
+   real path on Windows: unzip v1.1.1, run it with CRAWLER_UPDATE_URL pointing at a
+   local JSON (tag v1.1.2, asset on a local http.server), POST /api/update/install,
+   wait for /api/version to answer 1.1.2. The digest guards integrity, not
+   authenticity; `extractall` already strips `..`.
+8. Packaging: `trafilatura==2.2.0` pinned. Spec: collect_data_files for trafilatura,
+   justext, courlan, htmldate, tld; copy_metadata for trafilatura, justext, courlan,
+   htmldate, dateparser. No babel trimming. Call `extract(favor_recall=True,
+   include_tables=True, include_comments=False, with_metadata=False,
+   deduplicate=False, output_format='txt')` in try/except; fall back to XPath text when
+   it fails or returns under 50% of the XPath words; skip it for bodies over 5 MB.
+   Record the dist size in the PR.
+9. Smoke before the tag: release.yml gets a build-and-smoke job on pull_request and
+   tags, and a publish job (tags only, needs build). Frozen smoke:
+   WebsiteCrawlerWorker.exe --crawl against tests/fixtures/site/ (a listing page, two
+   pages sharing menu and footer, a page under 250 characters, a /a and /a/ pair);
+   fail unless >= 4 rows, >= 1 `text_source == trafilatura`, boilerplate.json exists;
+   and `WebsiteCrawler.exe --server-only` answers `/` and /api/version. Linux CI runs
+   `python -m playwright install --with-deps chromium` before pytest.
+10. Politeness: UA `WebsiteCrawler (+https://github.com/addico786/website_crawler)`,
+    `ROBOTSTXT_USER_AGENT = "WebsiteCrawler"` (no version; the crawler must not import
+    server.py). Always fetch robots.txt, even with --no-sitemap. Delay = max(user
+    delay, Crawl-delay), capped 60 s, logged, set on the slot and on AutoThrottle's
+    `mindelay`. Retry-After middleware at priority 560 (seconds or HTTP date), sets
+    the slot delay, capped 600 s, logged.
+11. Visible result: at close log `Result: N pages, D duplicates, ND near duplicates,
+    B boilerplate blocks, T trap URLs skipped`; same numbers in summary.json. CSV gets
+    `content_hash`, `duplicate_of`, `near_duplicate_of`, `text_source` (read with
+    `.get()` for old rows). Formula escaping on every string cell.
+
+Optional (later): graceful stop on Windows (1.1.3); cache load_items by (mtime,
+size); babel trimming; near-duplicates may slip to 1.1.3 if time runs short.
+
+## Build order (small commits)
+1. Linux CI workflow; tests switched to base_url.
+2. release.yml split, fixture site, frozen smoke (on current code first).
+3. Host and write guard, app.js JSON bodies, no-store and `?v=`, tests.
+4. CSV formula escaping, test.
+5. Updater: asset by name, digest, zip check, tests.
+6. User agent, Crawl-delay, Retry-After, tests.
+7. Hard cap, test.
+8. Key normalisation, session ids, canonical request, tests.
+9. trafilatura pin, spec datas, main text and fallback (one block per line), tests;
+   the Windows PR smoke must pass.
+10. content_hash, no-follow from duplicates, banded near-duplicates, resume rebuild.
+11. Conservative traps and suspected-trap report.
+12. textblocks.py, boilerplate.json, server load_items.
+13. Result log line and CSV columns.
+14. VERSION 1.1.2, README, CHANGELOG, CONTEXT; the 1.1.1 -> 1.1.2 update test on
+    Windows; merge; tag.

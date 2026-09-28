@@ -1,15 +1,21 @@
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 import scrapy
+from scrapy.exceptions import CloseSpider
 from scrapy.http import HtmlResponse
 from scrapy.linkextractors import IGNORED_EXTENSIONS, LinkExtractor
 from scrapy.utils.gz import gunzip
 from scrapy.utils.sitemap import Sitemap, sitemap_urls_from_robots
 from scrapy.utils.url import url_has_any_extension
-from w3lib.url import canonicalize_url, url_query_cleaner
+from w3lib.url import canonicalize_url
+
+from polite_crawler.fingerprints import NearDuplicates, content_hash, simhash
+from polite_crawler.maintext import main_text
+from polite_crawler.traps import TrapGuard
 
 # Files, not pages. Scrapy's list plus a few it misses.
 DENY_EXTENSIONS = sorted(set(IGNORED_EXTENSIONS) | {"avif", "gz", "json", "woff", "woff2"})
@@ -20,19 +26,48 @@ TRACKING_PARAMS = (
 )
 
 
-def strip_tracking(url):
-    return url_query_cleaner(url, TRACKING_PARAMS, remove=True, unique=False, keep_fragments=True)
+# Session ids: the same page for every visitor. "sid" only when it looks like one (32 hex digits).
+SESSION_PARAMS = ("jsessionid", "phpsessid", "sessionid")
+SESSION_ID = re.compile(r"[0-9a-f]{32}", re.I)
+DEFAULT_PORTS = {"http": 80, "https": 443}
+INDEX_FILE = re.compile(r"/index\.(?:html?|php)$", re.I)
+
+
+def clean_url(url):
+    """The URL to request: as found, minus click-tracking tags and session ids."""
+    parts = urlsplit(url)
+    path = re.sub(r";jsessionid=[^/?#]*", "", parts.path, flags=re.I)
+    kept = []
+    for pair in parts.query.split("&") if parts.query else []:
+        name, _, value = pair.partition("=")
+        name = unquote(name).lower()
+        if name in TRACKING_PARAMS or name in SESSION_PARAMS or (name == "sid" and SESSION_ID.fullmatch(unquote(value))):
+            continue
+        kept.append(pair)
+    return urlunsplit(parts._replace(path=path, query="&".join(kept)))
 
 
 def page_key(url):
-    """Same page => same key: ignores #fragments, query order and trailing-slash-on-host."""
-    return canonicalize_url(url)
+    """Same page => same key. Used only to spot duplicates; requests go to the URL as found.
+
+    Ignores host case, a leading www., the default port, #fragments, query order, one trailing
+    slash and a final index.html/htm/php. Keeps path case (servers may treat /A and /a apart).
+    """
+    parts = urlsplit(canonicalize_url(clean_url(url)))
+    host = (parts.hostname or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    if parts.port and parts.port != DEFAULT_PORTS.get(parts.scheme):
+        host += f":{parts.port}"
+    path = INDEX_FILE.sub("/", parts.path) or "/"
+    if path != "/" and path.endswith("/"):
+        path = path[:-1]
+    return urlunsplit((parts.scheme.lower(), host, path, parts.query, ""))
 
 
 class SiteSpider(scrapy.Spider):
     name = "site"
 
-    def __init__(self, start_url=None, job_dir=None, use_sitemap="True", render_js="False", *args, **kwargs):
+    def __init__(self, start_url=None, job_dir=None, use_sitemap="True", render_js="False", max_pages="0", *args, **kwargs):
         super().__init__(*args, **kwargs)
         if not start_url or not job_dir:
             raise ValueError("Pass -a start_url=https://example.com")
@@ -48,13 +83,35 @@ class SiteSpider(scrapy.Spider):
         self.job_dir = job_dir
         self.use_sitemap = str(use_sitemap).lower() == "true"
         self.render_js = str(render_js).lower() in ("true", "1", "yes")
+        # Hard cap on rows in results.jsonl, earlier runs of this job and error pages included
+        # (CLOSESPIDER_ITEMCOUNT only stops after the requests already in flight). 0 means no cap.
+        self.max_pages = int(max_pages or 0)
         # Pages saved by earlier runs of this job, so resuming doesn't save them twice.
         results = Path(job_dir) / "results.jsonl"
         self.saved_urls = set()
+        self.rows = 0
+        # Text fingerprints of saved pages: content_hash -> first URL, and the SimHash bands.
+        self.hashes = {}
+        self.near_duplicates = NearDuplicates()
         if results.exists():
             with results.open(encoding="utf-8") as f:
-                self.saved_urls = {page_key(json.loads(line)["url"]) for line in f if line.strip()}
-        self.link_extractor = LinkExtractor(deny_extensions=DENY_EXTENSIONS, process_value=strip_tracking, unique=True)
+                for line in f:
+                    if line.strip():
+                        row = json.loads(line)
+                        self.saved_urls.add(page_key(row["url"]))
+                        self.rows += 1
+                        self.remember_text(row)
+        # Keys of pages saved or already requested: a link to one of them is not requested again.
+        self.seen_keys = set(self.saved_urls)
+        self.traps = TrapGuard()
+        self.link_extractor = LinkExtractor(deny_extensions=DENY_EXTENSIONS, process_value=clean_url, unique=True)
+
+    def remember_text(self, row):
+        """Record a saved page's fingerprints so later copies are marked as duplicates."""
+        if row.get("content_hash") and not row.get("duplicate_of"):
+            self.hashes.setdefault(row["content_hash"], row["url"])
+            if row.get("simhash"):
+                self.near_duplicates.add(int(row["simhash"], 16), row["url"])
 
     def add_host(self, host):
         host = host.lower()
@@ -75,8 +132,17 @@ class SiteSpider(scrapy.Spider):
             meta |= {"playwright": True, "playwright_include_page": False}
         return scrapy.Request(url, callback=callback or self.parse, meta=meta, dont_filter=dont_filter)
 
+    def follow(self, url):
+        """Request a page unless a URL with the same key was already requested or saved, or it is a trap."""
+        key = page_key(url)
+        if key not in self.seen_keys:
+            self.seen_keys.add(key)
+            if self.traps.allow(url):
+                yield self.request(url)
+
     async def start(self):
         seed = self.start_urls[0]
+        self.seen_keys.add(page_key(seed))
         yield self.request(seed, dont_filter=True, seed=True)
         if self.use_sitemap:
             parsed = urlparse(seed)
@@ -100,14 +166,19 @@ class SiteSpider(scrapy.Spider):
             return
         # Sitemap yields only <url>/<sitemap> locations, not <image:loc> and friends.
         for entry in sitemap:
-            url = strip_tracking(response.urljoin(entry["loc"].strip()))
+            url = clean_url(response.urljoin(entry["loc"].strip()))
             if sitemap.type == "sitemapindex":
                 if self.in_scope(url):
                     yield self.request(url, callback=self.parse_sitemap)
             elif self.is_page_url(url):
-                yield self.request(url)
+                yield from self.follow(url)
+
+    def at_cap(self):
+        return bool(self.max_pages) and self.rows >= self.max_pages
 
     def parse(self, response):
+        if self.at_cap():  # a response still in flight, or a resumed job already at its cap
+            raise CloseSpider("page_cap")
         if response.meta.get("seed") and not self.in_scope(response.url):
             # e.g. example.com -> example.co.uk: crawl where the site actually lives.
             self.logger.info("Start URL redirected to %s; crawling that site instead.", response.url)
@@ -116,43 +187,62 @@ class SiteSpider(scrapy.Spider):
         if key in self.saved_urls or not self.in_scope(response.url):
             return
         self.saved_urls.add(key)
+        self.seen_keys.add(key)
         found_on = response.request.headers.get("Referer", b"").decode("latin-1")
 
         if not isinstance(response, HtmlResponse):
             # PDFs, images etc. served without a telltale extension: not pages. Broken ones still get a row.
             if response.status >= 400:
                 yield self.item(response, found_on)
+                if self.at_cap():
+                    raise CloseSpider("page_cap")
             return
 
-        content = response.xpath("//main | //article | //*[@role='main']")
-        root = content[0] if content else response
-        text = root.xpath(
-            ".//text()[normalize-space() and not(ancestor::script | ancestor::style | ancestor::noscript | ancestor::svg | ancestor::nav | ancestor::footer | ancestor::header)]"
-        ).getall()
-        clean_text = " ".join(part.strip() for part in text if part.strip())
+        clean_text, text_source = main_text(response.text, response.selector.root)
+        # Error pages often share one text ("Not found"); they are not duplicates of each other.
+        text_hash = content_hash(clean_text) if response.status < 300 else None
+        fingerprint = simhash(clean_text) if text_hash else None
+        duplicate_of = self.hashes.get(text_hash)
+        near_duplicate_of = self.near_duplicates.find(fingerprint) if fingerprint is not None and not duplicate_of else None
         robots_meta = " ".join(response.xpath("//meta[@name='robots']/@content").getall()).lower()
+        canonical_url = response.urljoin(response.css("link[rel='canonical']::attr(href)").get(default=response.url))
         links = [
             link for link in self.link_extractor.extract_links(response)
             if self.in_scope(link.url) and not link.nofollow
         ]
-        yield self.item(
+        item = self.item(
             response,
             found_on,
             title=response.css("title::text").get(default="").strip(),
             description=response.css("meta[name='description']::attr(content)").get(default="").strip(),
-            canonical_url=response.urljoin(response.css("link[rel='canonical']::attr(href)").get(default=response.url)),
+            canonical_url=canonical_url,
             headings=[heading.strip() for heading in response.css("h1::text, h2::text").getall() if heading.strip()],
             text=clean_text,
+            text_source=text_source,
             word_count=len(clean_text.split()),
             links_found=len(links),
+            content_hash=text_hash,
+            simhash=f"{fingerprint:016x}" if fingerprint is not None else None,
+            duplicate_of=duplicate_of,
+            near_duplicate_of=near_duplicate_of,
         )
+        self.remember_text(item)
+        yield item
+        if self.at_cap():
+            raise CloseSpider("page_cap")
         # Error pages' relative links resolve against a URL that doesn't exist, which
         # spirals into /missing/deeper/deeper/... Only follow links from real pages.
-        if response.status < 300 and "nofollow" not in robots_meta:
+        # An exact copy of a saved page links to the same places (and may be a trap: a
+        # pagination series past its end repeats the last page).
+        if response.status < 300 and "nofollow" not in robots_meta and not duplicate_of:
+            # The page names another URL as the real one (e.g. ?color=red -> the product): fetch that too.
+            if page_key(canonical_url) != key and self.is_page_url(canonical_url):
+                yield from self.follow(clean_url(canonical_url))
             for link in links:
-                yield self.request(link.url)
+                yield from self.follow(link.url)
 
     def item(self, response, found_on, **fields):
+        self.rows += 1
         return {
             "url": response.url,
             "status": response.status,
@@ -161,8 +251,13 @@ class SiteSpider(scrapy.Spider):
             "canonical_url": response.url,
             "headings": [],
             "text": "",
+            "text_source": None,
             "word_count": 0,
             "links_found": 0,
+            "content_hash": None,
+            "simhash": None,
+            "duplicate_of": None,
+            "near_duplicate_of": None,
             **fields,
             "found_on": found_on,
             "crawled_at": datetime.now(timezone.utc).isoformat(),

@@ -535,7 +535,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!currentJobId) return;
     if (confirm(`Stop crawl job '${currentJobId}'?`)) {
       try {
-        await fetch(`/api/jobs/${encodeURIComponent(currentJobId)}/stop`, { method: "POST" });
+        await fetch(`/api/jobs/${encodeURIComponent(currentJobId)}/stop`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
         showToast(`Job '${currentJobId}' stopped.`, "info");
         selectJob(currentJobId);
         fetchOverviewStats();
@@ -669,6 +669,8 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {
           method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
         });
         const data = await res.json();
 
@@ -777,7 +779,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!confirm(`${question}\n\nDownload and install it now? The dashboard will restart.`)) return;
 
       btnCheckUpdate.innerHTML = `${orbHtml("shaping")}Installing…`;
-      const install = await fetch("/api/update/install", { method: "POST" });
+      const install = await fetch("/api/update/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       const result = await install.json();
       if (!install.ok) return showToast("Update failed: " + (result.detail || "Server error"), "error");
       installing = true; // keep the button disabled until the page reloads

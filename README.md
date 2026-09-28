@@ -4,6 +4,16 @@ A powerful, polite, and user-friendly web crawler and data extractor featuring a
 
 ---
 
+## What is new in 1.2.1
+
+- **Less redundant data**: the main text of each page comes from trafilatura, so listing pages keep all their items; text repeated across most pages (banners, side blocks) is found once per job and left out of the dashboard and exports; URL variants and `rel=canonical` twins are fetched once; exact and near-duplicate pages are marked; endless calendars and loops are skipped; a page cap of 30 saves exactly 30 pages.
+- **A result line** at the end of every crawl: pages, duplicates, near duplicates, boilerplate blocks and trap URLs skipped (also in `summary.json`).
+- **Safer**: the dashboard refuses other sites' requests, updates are installed only when their sha256 matches the digest GitHub publishes, and CSV exports cannot run spreadsheet formulas.
+
+Full list: [CHANGELOG.md](CHANGELOG.md).
+
+---
+
 ## 🌟 Key Features
 
 - **🎨 Non-Technical Visual Dashboard**: No command line required! Start crawls, monitor progress, and view extracted data directly in your browser.
@@ -16,7 +26,7 @@ A powerful, polite, and user-friendly web crawler and data extractor featuring a
   - Search page titles, URLs, headings, and extracted text.
   - Filter by HTTP status code (200 OK, 404, 500).
   - Inspect page details (meta descriptions, H1/H2 headings, canonical URLs, and cleaned text).
-- **📥 1-Click Exports**: Download page results in **CSV** or **JSON** format with a single click.
+- **📥 1-Click Exports**: Download page results in **CSV** or **JSON** format with a single click. The CSV marks duplicates (`duplicate_of`, `near_duplicate_of`) and says where the text came from (`text_source`).
 - **📡 Real-Time Console Stream**: Live streaming log viewer directly in the browser via Server-Sent Events (SSE).
 - **🛡️ Polite & Safe**: Automatically obeys `robots.txt`, auto-throttles requests, handles rate limits, and caps page limits to protect target servers.
 - **🔗 Smart Link Handling**: Stays on the site's own host (plus `www.`), follows the start URL if it redirects to another domain, reads sitemaps listed in `robots.txt` (including sitemap indexes and `.xml.gz`), respects `rel="nofollow"` and `<meta name="robots" content="nofollow">`, strips click-tracking tags (`utm_*`, `gclid`, `fbclid`…) so the same page isn't saved twice, skips files (PDF, images, video, installers, office docs), and never follows links out of error pages. Broken pages are saved with their status code and the page that links to them (**Found On**).
@@ -32,7 +42,7 @@ A powerful, polite, and user-friendly web crawler and data extractor featuring a
 
 Your crawl data is stored in the `jobs` folder next to the `.exe`. The first launch downloads Chromium (~150 MB) in the background for "Render JavaScript" crawls.
 
-**Updates:** click **Check for Updates** at the bottom of the dashboard. If a newer version exists, the app downloads it, restarts itself, and the page reloads. Your `jobs` folder is kept. Stop any running crawls first.
+**Updates:** click **Check for Updates** at the bottom of the dashboard. If a newer version exists, the app downloads it, checks its sha256 against the digest GitHub publishes for the release, restarts itself, and the page reloads. Without a matching digest it installs nothing and offers the release page instead. Your `jobs` folder is kept. Stop any running crawls first.
 
 ### Option B: Windows from source (1-Click)
 Double-click **`start_dashboard.bat`** in the project folder. It will set up the environment automatically and open the dashboard in your default browser at:
@@ -91,8 +101,10 @@ python crawl.py https://example.com --render-js --minutes 10 --job jobs/spa_job_
 
 ### 3. Run Automated Tests
 ```bash
-python -m pytest test_smoke.py test_e2e.py
+python -m playwright install chromium   # once, for the JavaScript rendering test
+python -m pytest
 ```
+The tests crawl local fixture sites on 127.0.0.1 only. GitHub Actions runs them on every pull request, and builds and smoke-tests the Windows app (`tests/smoke_frozen.py`).
 
 ### 4. Building & Releasing the Windows App
 The app is packaged with [PyInstaller](https://pyinstaller.org/) (`--onedir`). PyInstaller cannot cross-compile, so build on Windows:
@@ -102,9 +114,9 @@ build_exe.bat
 This creates `dist\WebsiteCrawler\WebsiteCrawler.exe` and `dist\WebsiteCrawler-windows.zip`. The build is defined in `WebsiteCrawler.spec`: the window app plus `WebsiteCrawlerWorker.exe`, a console twin that runs crawls hidden so no console windows pop up.
 
 To publish an update that users receive through **Check for Updates**:
-1. Bump `VERSION` in `server.py` (e.g. `1.1.0`) and commit.
-2. Tag and push: `git tag v1.1.0 && git push origin v1.1.0`.
-3. The GitHub Actions workflow (`.github/workflows/release.yml`) builds on Windows and publishes the zip as a Release.
+1. Bump `VERSION` in `server.py` (e.g. `1.2.1`), add it to `CHANGELOG.md`, and commit.
+2. Tag and push: `git tag v1.2.1 && git push origin v1.2.1`.
+3. The GitHub Actions workflow (`.github/workflows/release.yml`) builds on Windows, smoke-tests the built app, and only then publishes `WebsiteCrawler-windows.zip` as a Release. The updater installs only an asset of that exact name, with a sha256 digest (GitHub adds it to release assets).
 
 The updater reads `https://api.github.com/repos/<UPDATE_REPO>/releases/latest` (`UPDATE_REPO` in `server.py`), so the repository must be **public**. Drafts and pre-releases are ignored. If the source repo is private, publish the release zips to a separate public repo and point `UPDATE_REPO` at it.
 
@@ -119,20 +131,27 @@ website_crawler/
 ├── crawl.py              # CLI launcher for Scrapy crawler
 ├── crawler.sh            # Interactive CLI launcher
 ├── polite_crawler/       # Scrapy spider, settings, and JSONL export pipelines
-│   ├── spiders/site.py   # Main SiteSpider logic (link extraction, text cleanup)
-│   ├── pipelines.py      # Writes results.jsonl and summary.json
+│   ├── spiders/site.py   # Main SiteSpider logic (link extraction, page keys, page cap)
+│   ├── maintext.py       # Main text with trafilatura, with a fallback
+│   ├── textblocks.py     # Site-wide boilerplate (boilerplate.json), shared with server.py
+│   ├── fingerprints.py   # content_hash and SimHash near-duplicates
+│   ├── traps.py          # Crawler trap rules and the suspected-trap report
+│   ├── pipelines.py      # Writes results.jsonl, boilerplate.json and summary.json
 │   └── settings.py       # Auto-throttling & politeness defaults
 ├── static/               # Visual Web Dashboard UI
 │   ├── index.html        # Single Page Dashboard Interface
-│   ├── app.css           # Glassmorphism dark mode styling & layout
-│   └── app.js            # Client-side SPA logic & real-time updates
+│   ├── app.css           # Slush design styling & layout
+│   ├── app.js            # Client-side SPA logic & real-time updates
+│   └── orbs.js           # Thinking-orbs loaders (vendored engine in vendor/)
 ├── start_dashboard.bat   # 1-Click Windows launcher script
 ├── start_dashboard.sh    # 1-Click Linux/WSL launcher script
 ├── build_exe.bat         # Builds the Windows app with PyInstaller
 ├── WebsiteCrawler.spec   # PyInstaller build: window app + hidden crawl worker
-├── .github/workflows/    # Release workflow: tag v* -> Windows build -> GitHub Release
+├── .github/workflows/    # Tests on Linux; Windows build + smoke on PRs; tag v* -> GitHub Release
+├── tests/                # Crawler, dashboard guard, export and updater tests; fixture site
 ├── test_smoke.py         # Automated smoke & API unit tests
 ├── test_e2e.py           # End-to-end crawl tests against a local mock site
+├── CHANGELOG.md          # What changed in each version
 ├── .gitignore            # Git exclusion settings
 ├── .env.example          # Environment configuration template
 └── requirements.txt      # Python dependencies

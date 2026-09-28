@@ -1,0 +1,32 @@
+# Runs the tests on every push to main and on every pull request.
+# The Windows build and its smoke crawl run in release.yml.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install -r requirements.txt
+          # test_e2e renders a page with Playwright.
+          python -m playwright install --with-deps chromium
+
+      - name: Test
+        run: python -m pytest -v
