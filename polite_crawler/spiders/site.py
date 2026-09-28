@@ -11,6 +11,8 @@ from scrapy.linkextractors import IGNORED_EXTENSIONS, LinkExtractor
 from scrapy.utils.gz import gunzip
 from scrapy.utils.sitemap import Sitemap, sitemap_urls_from_robots
 from scrapy.utils.url import url_has_any_extension
+from scrapy_playwright.page import PageMethod
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 from w3lib.url import canonicalize_url
 
 from polite_crawler.fingerprints import NearDuplicates, content_hash, simhash
@@ -31,6 +33,16 @@ SESSION_PARAMS = ("jsessionid", "phpsessid", "sessionid")
 SESSION_ID = re.compile(r"[0-9a-f]{32}", re.I)
 DEFAULT_PORTS = {"http": 80, "https": 443}
 INDEX_FILE = re.compile(r"/index\.(?:html?|php)$", re.I)
+
+
+async def settle(page):
+    """Wait until the page stops loading data (at most 10 s), so the HTML we save is what
+    the page shows. Apps that route in the browser redraw after the load event: without
+    this, /terms can be saved mid-redraw, still carrying the home page's HTML or a bare frame."""
+    try:
+        await page.wait_for_load_state("networkidle", timeout=10_000)
+    except PlaywrightTimeout:
+        pass  # a page that polls forever: keep what it shows now
 
 
 def clean_url(url):
@@ -129,7 +141,7 @@ class SiteSpider(scrapy.Spider):
         # otherwise drop hosts adopted after a seed redirect.
         meta = {"allow_offsite": True, **meta}
         if self.render_js and callback is None:
-            meta |= {"playwright": True, "playwright_include_page": False}
+            meta |= {"playwright": True, "playwright_include_page": False, "playwright_page_methods": [PageMethod(settle)]}
         return scrapy.Request(url, callback=callback or self.parse, meta=meta, dont_filter=dont_filter)
 
     def follow(self, url):
