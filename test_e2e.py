@@ -67,10 +67,11 @@ class MockHTMLHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content.encode("utf-8"))
         elif self.path == "/sitemap.xml":
-            content = """<?xml version="1.0" encoding="UTF-8"?>
+            base = f"http://127.0.0.1:{self.server.server_port}"
+            content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>http://127.0.0.1:9999/</loc></url>
-  <url><loc>http://127.0.0.1:9999/about.html</loc></url>
+  <url><loc>{base}/</loc></url>
+  <url><loc>{base}/about.html</loc></url>
 </urlset>"""
             self.send_response(200)
             self.send_header("Content-Type", "application/xml; charset=utf-8")
@@ -87,10 +88,10 @@ class MockHTMLHandler(SimpleHTTPRequestHandler):
 
 @pytest.fixture(scope="module")
 def mock_server():
-    server = HTTPServer(("127.0.0.1", 9999), MockHTMLHandler)
+    server = HTTPServer(("127.0.0.1", 0), MockHTMLHandler)  # a free port: a fixed one can still be busy
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    yield "http://127.0.0.1:9999"
+    yield f"http://127.0.0.1:{server.server_port}"
     server.shutdown()
 
 
@@ -107,6 +108,7 @@ def test_invalid_job_requests():
 def test_full_crawl_lifecycle_and_exports(mock_server):
     seed_url = f"{mock_server}/"
     job_name = "e2e_mock_test_job"
+    shutil.rmtree(JOBS_DIR / job_name, ignore_errors=True)  # rows from an earlier run would be resumed
 
     # Start Crawl
     start_payload = {
