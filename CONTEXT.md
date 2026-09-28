@@ -18,9 +18,16 @@
   checksum or signature; CSV export allows spreadsheet formulas; the
   crawler's contact address is a placeholder; tests run only on tags.
   All 14 tests pass (`env/bin/python -m pytest test_smoke.py test_e2e.py`).
+- Owner (2026-09-28): the redesign uses the "Slush" design system
+  (`docs/design-system-slush.md`, adaptation rules bind) with thinking-orbs
+  loaders; the owner checks each release through the app's "Check for
+  Updates" on Windows. thinking-orbs ships a React-free engine
+  (`thinking-orbs/engine`, about 27 KB, MIT) usable from the plain-JS page.
+  The owner's complaint: "downloading redundant data, not smart enough"
+  (boilerplate, duplicate pages, traps).
 - Plan: 1.1.2 = fixes (page cap, full text of listing pages, dashboard
   protection, CSV safety, update checksum from GitHub's asset digest,
-  real contact address, CI on push and pull requests); 1.2.0 = SEO audit,
+  real contact address, CI on push and pull requests); 1.2.0 = the Slush redesign with orbs; 1.3.0 = SEO audit,
   structured data, JavaScript reliability (after research). Full update
   signing needs a key only the owner holds: ask him.
 - Branch per version, PR, CI green, merge, tag `v<VERSION>` (VERSION in
