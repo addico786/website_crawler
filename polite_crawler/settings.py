@@ -4,7 +4,9 @@ NEWSPIDER_MODULE = "polite_crawler.spiders"
 
 # Compliance and long-running safety defaults. Override deliberately via crawl.py.
 ROBOTSTXT_OBEY = True
-USER_AGENT = "PoliteCrawler/1.0 (+https://example.invalid/crawler-contact)"
+# A stable name robots.txt rules can address, and where site owners can find out about it.
+USER_AGENT = "WebsiteCrawler (+https://github.com/addico786/website_crawler)"
+ROBOTSTXT_USER_AGENT = "WebsiteCrawler"
 AUTOTHROTTLE_ENABLED = True
 AUTOTHROTTLE_START_DELAY = 1.0
 AUTOTHROTTLE_MAX_DELAY = 60.0
@@ -19,8 +21,10 @@ RETRY_HTTP_CODES = [408, 429, 500, 502, 503, 504]
 HTTPERROR_ALLOW_ALL = True
 HTTPCACHE_ENABLED = False
 ITEM_PIPELINES = {"polite_crawler.pipelines.JobOutputPipeline": 300}
+DOWNLOADER_MIDDLEWARES = {"polite_crawler.middlewares.RetryAfterMiddleware": 560}
 EXTENSIONS = {
     "polite_crawler.extensions.ProgressExtension": 500,
+    "polite_crawler.extensions.CrawlDelayExtension": 500,
     "scrapy.extensions.telnet.TelnetConsole": None,
     "scrapy.extensions.remote_control.RemoteControl": None,
 }
