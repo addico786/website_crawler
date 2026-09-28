@@ -3,6 +3,7 @@
 import hashlib
 import json
 import pickle
+import shutil
 import time
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse
@@ -137,6 +138,7 @@ def test_without_a_browser_every_address_gives_the_home_page(spa_site, crawl, tm
     log = (tmp_path / "job" / "job.log").read_text(encoding="utf-8")
     assert "This site answers every address with the same page (a single-page app)." in log
     assert "Render JavaScript is not available; pages will look the same. Install it from the dashboard." in log
+    assert result["result"]["suspicious"] == 4 and "4 suspicious (same page for different addresses)" in log
 
 
 def test_the_crawl_switches_to_rendering_and_a_resume_keeps_it(spa_site, crawl, tmp_path):
@@ -244,3 +246,23 @@ def test_a_page_that_never_goes_quiet_is_still_saved(crawl):
     assert [row["title"] for row in rows] == ["Live scores"]
     assert "Drawn by the script before the timeout" in rows[0]["text"]
     assert elapsed < 100  # the settle wait gives up after 10 s; the page is not dropped
+
+
+def test_the_dashboard_says_to_turn_on_rendering():
+    from fastapi.testclient import TestClient
+
+    from server import BASE_DIR, JOBS_DIR, app
+
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+    job = JOBS_DIR / "test_same_page_note"
+    job.mkdir(parents=True, exist_ok=True)
+    try:
+        (job / "summary.json").write_text(json.dumps({"site_notes": ["same_page_for_every_address"], "render_js": False}))
+        detail = client.get("/api/jobs/test_same_page_note").json()
+        assert detail["summary"]["site_notes"] == ["same_page_for_every_address"] and detail["summary"]["render_js"] is False
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
+    page = client.get("/").text
+    assert "This site sends the same page for every address. Turn on Render JavaScript." in page
+    script = (BASE_DIR / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'notes.includes("same_page_for_every_address") && !summary.render_js' in script

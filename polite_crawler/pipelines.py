@@ -89,10 +89,12 @@ class JobOutputPipeline:
             "near_duplicates": sum(1 for row in rows if row.get("near_duplicate_of")),
             "boilerplate_blocks": len(blocks),
             "trap_urls_skipped": sum(traps.skipped.values()) if traps else 0,
+            "suspicious": sum(1 for row in rows if row.get("suspicious")),
         }
         logger.info(
             "Result: %(pages)d pages, %(duplicates)d duplicates, %(near_duplicates)d near duplicates, "
-            "%(boilerplate_blocks)d boilerplate blocks, %(trap_urls_skipped)d trap URLs skipped",
+            "%(boilerplate_blocks)d boilerplate blocks, %(trap_urls_skipped)d trap URLs skipped, "
+            "%(suspicious)d suspicious (same page for different addresses)",
             result,
         )
         summary = {

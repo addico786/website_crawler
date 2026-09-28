@@ -25,6 +25,7 @@ def test_fixture_site_crawl(fixture_site, crawl, tmp_path):
     # The result line and summary.json say what was marked and removed.
     result = summary["result"]
     assert result == {"pages": 6, "duplicates": 0, "near_duplicates": 0, "boilerplate_blocks": len(boilerplate["blocks"]),
-                      "trap_urls_skipped": 0}
+                      "trap_urls_skipped": 0, "suspicious": 0}
     log = (tmp_path / "job" / "job.log").read_text(encoding="utf-8")
-    assert f"Result: 6 pages, 0 duplicates, 0 near duplicates, {len(boilerplate['blocks'])} boilerplate blocks, 0 trap URLs skipped" in log
+    assert (f"Result: 6 pages, 0 duplicates, 0 near duplicates, {len(boilerplate['blocks'])} boilerplate blocks, "
+            "0 trap URLs skipped, 0 suspicious (same page for different addresses)") in log
