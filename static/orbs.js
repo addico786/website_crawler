@@ -29,7 +29,9 @@ const SIZES = [20, 32, 64]; // the engine's tuned presets
 // paper, white on dark) and depth is shown by opacity alone, from 1 for the
 // nearest dots down to INK_FLOOR for the farthest. The engine's own painter
 // fades far dots toward the paper colour, which reads as pale grey here.
-const INK_FLOOR = 0.3;
+const INK_FLOOR = 0.45;
+// With solid ink the globe's un-scanned dots (dimBase 0.45) read as grey; lift them.
+const SOLID_EXTRA = { searching: { dimBase: 0.85 } };
 const DPR_CAP = 2; // same cap as the React component
 
 /** Job status (from /api/jobs) -> orb state per size, or no orb.
@@ -173,7 +175,7 @@ export function mountOrb(el, { state = "working", size = 20, ink = "solid" } = {
     if (s) {
       const resolved = resolvePreset(s, preset);
       frameFn = MODE_FRAMES[resolved.mode];
-      opts = resolved.opts;
+      opts = ink === "engine" ? resolved.opts : { ...resolved.opts, ...SOLID_EXTRA[s] };
       speed = resolved.speed;
       if (!isReduced()) draw((performance.now() / 1e3) * speed); // first frame now, no blank flash
     } else {
