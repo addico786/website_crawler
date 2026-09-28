@@ -46,4 +46,5 @@ def test_index_is_not_cached_and_versions_its_assets():
         assert response.headers["cache-control"] == "no-store"
         assert f'src="/app.js?v={VERSION}"' in response.text
         assert f'href="/app.css?v={VERSION}"' in response.text
+        assert f'src="/orbs.js?v={VERSION}"' in response.text
     assert client.get(f"/app.js?v={VERSION}").status_code == 200

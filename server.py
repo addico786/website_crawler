@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 
 from polite_crawler.textblocks import load_boilerplate, strip_boilerplate
 
-VERSION = "1.1.1"  # Bump before tagging a release; the tag must be v<VERSION>.
+VERSION = "1.2.0"  # Bump before tagging a release; the tag must be v<VERSION>.
 UPDATE_REPO = "addico786/website_crawler"  # GitHub repo whose Releases hold the Windows builds; must be public.
 # Override to test the updater against a local fake release.
 UPDATE_URL = os.environ.get("CRAWLER_UPDATE_URL", f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
@@ -875,13 +875,19 @@ def install_update():
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 def index_page():
-    # After an update the page must load the new app.js and app.css, not the browser's cached copies.
+    # After an update the page must load the new app.js, app.css and orbs.js, not the browser's cached copies.
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    html = re.sub(r'"/(app\.(?:js|css))"', rf'"/\1?v={VERSION}"', html)
+    html = re.sub(r'"/((?:app|orbs)\.(?:js|css))"', rf'"/\1?v={VERSION}"', html)
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 # Mount Static Dashboard Frontend
+# The Windows registry can map .js to text/plain, and browsers refuse to run
+# ES modules (static/orbs.js) served that way; pin the types we ship.
+import mimetypes  # noqa: E402
+
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("font/woff2", ".woff2")
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 
