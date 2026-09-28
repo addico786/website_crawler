@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scrapy import signals
+from scrapy.exceptions import DropItem
 
 
 class JobOutputPipeline:
@@ -20,9 +21,16 @@ class JobOutputPipeline:
     def open_spider(self, spider):
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.job_dir = Path(spider.job_dir)
-        self.file = (self.job_dir / "results.jsonl").open("a", encoding="utf-8")
+        results = self.job_dir / "results.jsonl"
+        # Backstop for the spider's page cap: never write more rows than the cap.
+        self.max_pages = getattr(spider, "max_pages", 0)
+        self.rows = sum(1 for line in results.open(encoding="utf-8") if line.strip()) if results.exists() else 0
+        self.file = results.open("a", encoding="utf-8")
 
     def process_item(self, item, spider):
+        if self.max_pages and self.rows >= self.max_pages:
+            raise DropItem(f"page cap of {self.max_pages} reached")
+        self.rows += 1
         self.file.write(json.dumps(dict(item), ensure_ascii=False) + "\n")
         self.file.flush()
         self.saved += 1

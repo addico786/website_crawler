@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import scrapy
+from scrapy.exceptions import CloseSpider
 from scrapy.http import HtmlResponse
 from scrapy.linkextractors import IGNORED_EXTENSIONS, LinkExtractor
 from scrapy.utils.gz import gunzip
@@ -32,7 +33,7 @@ def page_key(url):
 class SiteSpider(scrapy.Spider):
     name = "site"
 
-    def __init__(self, start_url=None, job_dir=None, use_sitemap="True", render_js="False", *args, **kwargs):
+    def __init__(self, start_url=None, job_dir=None, use_sitemap="True", render_js="False", max_pages="0", *args, **kwargs):
         super().__init__(*args, **kwargs)
         if not start_url or not job_dir:
             raise ValueError("Pass -a start_url=https://example.com")
@@ -48,12 +49,16 @@ class SiteSpider(scrapy.Spider):
         self.job_dir = job_dir
         self.use_sitemap = str(use_sitemap).lower() == "true"
         self.render_js = str(render_js).lower() in ("true", "1", "yes")
+        # Hard cap on rows in results.jsonl, earlier runs of this job and error pages included
+        # (CLOSESPIDER_ITEMCOUNT only stops after the requests already in flight). 0 means no cap.
+        self.max_pages = int(max_pages or 0)
         # Pages saved by earlier runs of this job, so resuming doesn't save them twice.
         results = Path(job_dir) / "results.jsonl"
         self.saved_urls = set()
         if results.exists():
             with results.open(encoding="utf-8") as f:
                 self.saved_urls = {page_key(json.loads(line)["url"]) for line in f if line.strip()}
+        self.rows = len(self.saved_urls)
         self.link_extractor = LinkExtractor(deny_extensions=DENY_EXTENSIONS, process_value=strip_tracking, unique=True)
 
     def add_host(self, host):
@@ -107,7 +112,12 @@ class SiteSpider(scrapy.Spider):
             elif self.is_page_url(url):
                 yield self.request(url)
 
+    def at_cap(self):
+        return bool(self.max_pages) and self.rows >= self.max_pages
+
     def parse(self, response):
+        if self.at_cap():  # a response still in flight, or a resumed job already at its cap
+            raise CloseSpider("page_cap")
         if response.meta.get("seed") and not self.in_scope(response.url):
             # e.g. example.com -> example.co.uk: crawl where the site actually lives.
             self.logger.info("Start URL redirected to %s; crawling that site instead.", response.url)
@@ -122,6 +132,8 @@ class SiteSpider(scrapy.Spider):
             # PDFs, images etc. served without a telltale extension: not pages. Broken ones still get a row.
             if response.status >= 400:
                 yield self.item(response, found_on)
+                if self.at_cap():
+                    raise CloseSpider("page_cap")
             return
 
         content = response.xpath("//main | //article | //*[@role='main']")
@@ -146,6 +158,8 @@ class SiteSpider(scrapy.Spider):
             word_count=len(clean_text.split()),
             links_found=len(links),
         )
+        if self.at_cap():
+            raise CloseSpider("page_cap")
         # Error pages' relative links resolve against a URL that doesn't exist, which
         # spirals into /missing/deeper/deeper/... Only follow links from real pages.
         if response.status < 300 and "nofollow" not in robots_meta:
@@ -153,6 +167,7 @@ class SiteSpider(scrapy.Spider):
                 yield self.request(link.url)
 
     def item(self, response, found_on, **fields):
+        self.rows += 1
         return {
             "url": response.url,
             "status": response.status,

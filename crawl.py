@@ -31,11 +31,11 @@ def main() -> int:
     command = [
         "scrapy", "crawl", "site", "-a", f"start_url={args.url}",
         "-a", f"job_dir={job.resolve()}", "-a", f"use_sitemap={not args.no_sitemap}",
-        "-a", f"render_js={args.render_js}",
+        "-a", f"render_js={args.render_js}", "-a", f"max_pages={args.max_pages}",
         "-s", f"JOBDIR={job.resolve()}", "-s", f"DOWNLOAD_DELAY={args.delay}",
         "-s", f"CONCURRENT_REQUESTS_PER_DOMAIN={args.concurrency}",
     ]
-    if args.max_pages:
+    if args.max_pages:  # the spider enforces the cap; this is a backstop
         command += ["-s", f"CLOSESPIDER_ITEMCOUNT={args.max_pages}"]
     if args.max_depth:
         command += ["-s", f"DEPTH_LIMIT={args.max_depth}"]
