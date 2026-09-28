@@ -3,7 +3,9 @@
 1. WebsiteCrawlerWorker.exe --crawl crawls tests/fixtures/site/ (served on 127.0.0.1);
    fails unless enough pages are saved.
 2. WebsiteCrawler.exe --server-only must answer / and /api/version with this VERSION.
-3. The release zip beside it must hold WebsiteCrawler/WebsiteCrawler.exe and the install steps.
+3. The release zip beside it must hold WebsiteCrawler/WebsiteCrawler.exe (the updater's layout).
+4. WebsiteCrawler-Setup.exe must install silently into a temporary folder, the installed app must
+   answer /api/version, and the uninstaller must remove the program files again.
 
 Usage: python tests/smoke_frozen.py [dist/WebsiteCrawler]
 """
@@ -62,20 +64,48 @@ def smoke_crawl(job):
 
 
 def smoke_zip():
-    # The updater looks for WebsiteCrawler.exe inside the zip; people need the install steps beside it.
+    # The updater unpacks this zip and looks for WebsiteCrawler.exe in its WebsiteCrawler folder.
     zip_path = DIST.parent / "WebsiteCrawler-windows.zip"
     if not zip_path.exists():
         fail(f"{zip_path} was not built")
     names = set(zipfile.ZipFile(zip_path).namelist())
-    for needed in ("WebsiteCrawler/WebsiteCrawler.exe", "WebsiteCrawler/WebsiteCrawlerWorker.exe", "WebsiteCrawler/HOW TO INSTALL.txt"):
+    for needed in ("WebsiteCrawler/WebsiteCrawler.exe", "WebsiteCrawler/WebsiteCrawlerWorker.exe"):
         if needed not in names:
             fail(f"{needed} is missing from {zip_path.name}")
-    print(f"Zip OK: {len(names)} files, with HOW TO INSTALL.txt")
+    print(f"Zip OK: {len(names)} files")
 
 
-def smoke_server():
+def smoke_installer():
+    setup = DIST.parent / "WebsiteCrawler-Setup.exe"
+    if not setup.exists():
+        fail(f"{setup} was not built")
+    shortcut = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Website Crawler.lnk"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+        target = Path(directory) / "WebsiteCrawler"
+        command = [str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/CURRENTUSER", "/NORESTART", f"/DIR={target}"]
+        code = subprocess.run(command, timeout=600).returncode
+        if code:
+            fail(f"the installer exited with {code}")
+        if not (target / "WebsiteCrawler.exe").exists() or not shortcut.exists():
+            fail(f"the installer did not install WebsiteCrawler.exe and its Start menu shortcut into {target}")
+        smoke_server(target)
+        # The uninstaller runs from a copy in %TEMP% and returns at once: wait for it to finish.
+        subprocess.run([str(target / "unins000.exe"), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], timeout=300)
+        program = ["WebsiteCrawler.exe", "WebsiteCrawlerWorker.exe", "_internal", "unins000.exe"]
+        for _ in range(120):
+            left = [name for name in program if (target / name).exists()]
+            if not left and not shortcut.exists():
+                break
+            time.sleep(1)
+        else:
+            fail(f"the uninstaller left {left or 'the Start menu shortcut'} behind")
+        print(f"Installer OK: {setup.stat().st_size / 1e6:.1f} MB; installed, ran and uninstalled"
+              f"{'' if target.exists() else ' (folder removed)'}")
+
+
+def smoke_server(folder=DIST):
     env = {**os.environ, "PORT": str(PORT)}
-    proc = subprocess.Popen([str(DIST / "WebsiteCrawler.exe"), "--server-only"], env=env)
+    proc = subprocess.Popen([str(folder / "WebsiteCrawler.exe"), "--server-only"], env=env)
     try:
         base = f"http://127.0.0.1:{PORT}"
         for _ in range(120):
@@ -85,16 +115,22 @@ def smoke_server():
             except OSError:
                 time.sleep(1)
         else:
-            fail("the dashboard did not answer /api/version", DIST / "app.log")
+            fail("the dashboard did not answer /api/version", folder / "app.log")
         if version != VERSION:
             fail(f"/api/version says {version}, server.py says {VERSION}")
         page = urllib.request.urlopen(base + "/", timeout=5).read().decode("utf-8")
         if "<html" not in page.lower():
             fail("/ did not return the dashboard page")
-        print(f"Server OK: version {version}")
+        print(f"Server OK: version {version} from {folder}")
     finally:
         # /T also stops the Chromium installer the app starts in the background.
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+        for _ in range(20):  # the next check starts another app on this port
+            try:
+                urllib.request.urlopen(base + "/api/version", timeout=1)
+                time.sleep(0.5)
+            except OSError:
+                break
 
 
 if __name__ == "__main__":
@@ -102,4 +138,5 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as directory:
         smoke_crawl(Path(directory))
     smoke_server()
+    smoke_installer()
     print("Smoke test passed.")

@@ -1,6 +1,4 @@
 # PyInstaller build of the Windows app. Run build_exe.bat (PyInstaller can't cross-compile).
-from pathlib import Path
-
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
 
 datas = [
@@ -49,10 +47,3 @@ pyz = PYZ(a.pure)
 app = EXE(pyz, a.scripts, [], exclude_binaries=True, name="WebsiteCrawler", console=False)
 worker = EXE(pyz, a.scripts, [], exclude_binaries=True, name="WebsiteCrawlerWorker", console=True)
 coll = COLLECT(app, worker, a.binaries, a.datas, name="WebsiteCrawler")
-
-# Install steps for people who download the zip, beside WebsiteCrawler.exe (not in _internal),
-# with Windows line endings for Notepad. The updater copies only _internal and *.exe.
-install_notes = Path(SPECPATH) / "packaging" / "HOW TO INSTALL.txt"
-(Path(DISTPATH) / "WebsiteCrawler" / install_notes.name).write_text(
-    install_notes.read_text(encoding="utf-8"), encoding="utf-8", newline="\r\n"
-)
