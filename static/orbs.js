@@ -30,7 +30,7 @@ const DPR_CAP = 2; // same cap as the React component
 /** Job status (from /api/jobs) -> orb state, or "" for no orb.
  *  The engine has no "done" or "error" animation, so finished, stopped and
  *  failed jobs show their status sticker and word without an orb. */
-export const JOB_STATUS_ORB = { running: "working" };
+export const JOB_STATUS_ORB = { running: "searching" }; // a dotted globe with a scan sweep
 
 const reducedMq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 const darkMq = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;

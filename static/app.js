@@ -113,7 +113,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentJobStatus.dataset.status = s;
     currentJobStatus.innerHTML = statusBadgeHtml(s);
     currentJobStatus.className = `job-status-pill status-badge ${s}`;
-    if (currentJobOrb) currentJobOrb.setAttribute("data-orb", s === "running" ? "working" : "");
+    if (currentJobOrb) currentJobOrb.setAttribute("data-orb", s === "running" ? "searching" : "");
   }
 
   // --- Toast Notification Helper ---
@@ -181,6 +181,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     lastJobsState = stateKey;
 
+    // Keep keyboard focus on the same job card across a re-render.
+    const focusEl = jobsListContainer.contains(document.activeElement) ? document.activeElement : null;
+    const focusJob = focusEl && focusEl.closest(".job-item") ? focusEl.closest(".job-item").getAttribute("data-job-id") : null;
+    const focusPart = focusEl && focusEl.classList.contains("job-item-delete") ? ".job-item-delete" : ".job-item-main";
+
     jobsListContainer.innerHTML = jobs
       .map((job) => {
         const isActive = job.job_id === currentJobId ? "active" : "";
@@ -188,7 +193,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const dateStr = new Date(job.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         
         const jsBadge = job.render_js ? `<span class="badge-js" title="JavaScript rendering enabled">JS</span>` : "";
-        const orb = statusClass === "running" ? orbHtml("working") : "";
+        const orb = statusClass === "running" ? orbHtml("searching") : "";
         return `
         <div class="job-item ${isActive}" data-job-id="${esc(job.job_id)}">
           <div class="job-item-actions">
@@ -210,6 +215,12 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>`;
       })
       .join("");
+
+    if (focusJob) {
+      const card = [...jobsListContainer.querySelectorAll(".job-item")].find((el) => el.getAttribute("data-job-id") === focusJob);
+      const target = card && card.querySelector(focusPart);
+      if (target) target.focus();
+    }
   }
 
   // Delegated event listener for sidebar jobs - reliable, never drops clicks on re-render
@@ -727,7 +738,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const original = btnCheckUpdate.innerHTML;
     let installing = false;
     btnCheckUpdate.disabled = true;
-    btnCheckUpdate.innerHTML = `${orbHtml("searching")}Checking…`;
+    btnCheckUpdate.innerHTML = `${orbHtml("connecting")}Checking…`;
     try {
       const res = await fetch("/api/update/check");
       const data = await res.json();

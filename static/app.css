@@ -284,7 +284,7 @@ i[class*="fa-"] {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
-  gap: 20px 32px;
+  gap: 20px 48px;
 }
 
 .hero {
@@ -314,33 +314,42 @@ i[class*="fa-"] {
 }
 
 .hero-dot {
-  color: var(--violet);
+  color: inherit;
 }
 
+.hero-word {
+  position: relative;
+  display: inline-block;
+  align-self: flex-start;
+  padding-right: 0.5em; /* room for the stickers */
+}
+
+/* Flat stickers placed loosely around the hero word (sized in em, so they
+   follow the word at every width). */
 .sticker-deco {
   position: absolute;
   pointer-events: none;
 }
 .deco-star {
-  width: 40px;
-  height: 40px;
-  left: 172px;
-  top: -8px;
+  width: 0.36em;
+  height: 0.36em;
+  left: 1.62em;
+  top: -0.42em;
   transform: rotate(-12deg);
 }
 .deco-blob {
-  width: 30px;
-  height: 30px;
-  left: clamp(262px, 25vw, 360px);
-  bottom: 44px;
+  width: 0.26em;
+  height: 0.26em;
+  right: 0.12em;
+  top: -0.12em;
   transform: rotate(18deg);
 }
 .deco-pill {
-  width: 44px;
-  height: 22px;
-  left: clamp(300px, 27vw, 400px);
-  bottom: 0;
-  transform: rotate(-8deg);
+  width: 0.42em;
+  height: 0.21em;
+  right: 0.04em;
+  bottom: 0.16em;
+  transform: rotate(-14deg);
 }
 
 /* Overview numbers */
@@ -1488,9 +1497,6 @@ input[type="checkbox"] {
   .modal-content {
     border-radius: var(--r-body);
     padding: 20px;
-  }
-  .detail-row {
-    grid-template-columns: minmax(0, 1fr);
   }
   .app-footer {
     border-radius: var(--r-card);
