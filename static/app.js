@@ -99,6 +99,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const esc = (v) =>
     String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
+  // --- Status stickers and thinking orbs (1.2.0) ---
+  // A status is a sticker plus a word. Long-running work gets an orb: any
+  // <span data-orb="state"> is animated by static/orbs.js (words stay next to it).
+  const currentJobOrb = document.getElementById("current-job-orb");
+  const STATUS_WORDS = { running: "Running", completed: "Finished", stopped: "Stopped", failed: "Failed" };
+  const statusWord = (s) => STATUS_WORDS[s] || String(s || "idle").replace(/^./, (c) => c.toUpperCase());
+  const statusBadgeHtml = (s) => `<span class="sticker" aria-hidden="true"></span>${esc(statusWord(s))}`;
+  const orbHtml = (state, size = 20) => `<span class="orb" data-orb="${state}" data-orb-size="${size}"></span>`;
+  function renderCurrentStatus(status) {
+    const s = String(status || "idle").toLowerCase();
+    if (currentJobStatus.dataset.status === s) return; // unchanged: do not re-announce
+    currentJobStatus.dataset.status = s;
+    currentJobStatus.innerHTML = statusBadgeHtml(s);
+    currentJobStatus.className = `job-status-pill status-badge ${s}`;
+    if (currentJobOrb) currentJobOrb.setAttribute("data-orb", s === "running" ? "working" : "");
+  }
+
   // --- Toast Notification Helper ---
   let toastTimer = null;
   function showToast(message, type = "info") {
@@ -153,8 +170,7 @@ document.addEventListener("DOMContentLoaded", () => {
       lastJobsState = "empty";
       jobsListContainer.innerHTML = `
         <div class="empty-jobs">
-          <i class="fa-solid fa-inbox"></i>
-          <p>No crawl jobs found.<br>Click "New Crawl" to start!</p>
+          <p>No crawl jobs yet.<br>Click “New crawl” to start.</p>
         </div>`;
       return;
     }
@@ -171,24 +187,26 @@ document.addEventListener("DOMContentLoaded", () => {
         const statusClass = (job.status || "idle").toLowerCase();
         const dateStr = new Date(job.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         
-        const jsBadge = job.render_js ? `<span class="badge-js" title="JavaScript rendering enabled"><i class="fa-brands fa-js"></i> JS</span>` : "";
+        const jsBadge = job.render_js ? `<span class="badge-js" title="JavaScript rendering enabled">JS</span>` : "";
+        const orb = statusClass === "running" ? orbHtml("working") : "";
         return `
         <div class="job-item ${isActive}" data-job-id="${esc(job.job_id)}">
-          <div class="job-item-header">
+          <div class="job-item-actions">
+            ${orb}
+            <span class="status-badge ${esc(statusClass)}">${statusBadgeHtml(statusClass)}</span>
+            ${jsBadge}
+            <button type="button" class="job-item-delete" title="Delete job" aria-label="Delete job ${esc(job.job_id)}" data-delete-id="${esc(job.job_id)}">
+              <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <button type="button" class="job-item-main">
             <span class="job-item-id" title="${esc(job.job_id)}">${esc(job.job_id)}</span>
-            <div class="job-item-actions">
-              ${jsBadge}
-              <span class="status-badge ${esc(statusClass)}">${esc(job.status)}</span>
-              <button class="job-item-delete" title="Delete job" data-delete-id="${esc(job.job_id)}">
-                <i class="fa-solid fa-trash"></i>
-              </button>
-            </div>
-          </div>
-          <div class="job-item-url" title="${esc(job.seed_url)}">${esc(job.seed_url)}</div>
-          <div class="job-item-footer">
-            <span><i class="fa-solid fa-file"></i> ${job.pages_saved || 0} pages</span>
-            <span><i class="fa-regular fa-clock"></i> ${dateStr}</span>
-          </div>
+            <span class="job-item-url" title="${esc(job.seed_url)}">${esc(job.seed_url)}</span>
+            <span class="job-item-footer">
+              <span>${job.pages_saved || 0} pages</span>
+              <span>${dateStr}</span>
+            </span>
+          </button>
         </div>`;
       })
       .join("");
@@ -230,8 +248,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await res.json();
       
       currentJobUrl.textContent = data.seed_url || jobId;
-      currentJobStatus.textContent = data.status.toUpperCase();
-      currentJobStatus.className = `job-status-pill status-badge ${data.status.toLowerCase()}`;
+      renderCurrentStatus(data.status);
       if (currentJobJsPill) {
         currentJobJsPill.style.display = data.render_js ? "inline-flex" : "none";
       }
@@ -267,6 +284,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const search = inputSearch.value.trim();
     const status = selectStatusFilter.value;
     const url = `/api/jobs/${encodeURIComponent(currentJobId)}/results?page=${currentPage}&limit=${currentLimit}&search=${encodeURIComponent(search)}${status ? '&status_code=' + status : ''}`;
+    // Show an orb only if loading is slow (big jobs), so quick loads do not flash.
+    const loadingTimer = setTimeout(() => {
+      tableBody.innerHTML = `<tr><td colspan="7" class="text-center py-5"><span class="table-loading">${orbHtml("breathing", 32)}Loading pages…</span></td></tr>`;
+    }, 600);
 
     try {
       const res = await fetch(url);
@@ -284,6 +305,8 @@ document.addEventListener("DOMContentLoaded", () => {
       btnNextPage.disabled = currentPage >= totalPages;
     } catch (err) {
       console.error("Error fetching results:", err);
+    } finally {
+      clearTimeout(loadingTimer);
     }
   }
 
@@ -291,10 +314,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (items.length === 0) {
       tableBody.innerHTML = `
         <tr>
-          <td colspan="7" class="text-center py-5">
-            <i class="fa-solid fa-circle-exclamation text-muted mb-2"></i><br>
-            No results found for this job.
-          </td>
+          <td colspan="7" class="text-center py-5">No pages found for this job.</td>
         </tr>`;
       return;
     }
@@ -318,9 +338,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <td>${esc(item.links_found || 0)}</td>
           <td class="text-muted">${dateStr}</td>
           <td>
-            <button class="btn btn-outline btn-sm btn-view-detail" data-index="${index}">
-              <i class="fa-solid fa-eye"></i> Details
-            </button>
+            <button type="button" class="btn btn-outline btn-sm btn-view-detail" data-index="${index}">Details</button>
           </td>
         </tr>`;
       })
@@ -394,8 +412,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   presetCards.forEach((card) => {
     card.addEventListener("click", () => {
-      presetCards.forEach((c) => c.classList.remove("active"));
+      presetCards.forEach((c) => {
+        c.classList.remove("active");
+        c.setAttribute("aria-pressed", "false");
+      });
       card.classList.add("active");
+      card.setAttribute("aria-pressed", "true");
       currentPreset = card.getAttribute("data-preset");
 
       if (currentPreset === "quick") {
@@ -444,6 +466,10 @@ document.addEventListener("DOMContentLoaded", () => {
       render_js: checkRenderJs ? checkRenderJs.checked : false,
     };
 
+    const submitBtn = formNewCrawl.querySelector('[type="submit"]');
+    const submitLabel = submitBtn.innerHTML;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `${orbHtml("connecting")}Starting…`;
     try {
       const res = await fetch("/api/jobs/start", {
         method: "POST",
@@ -464,6 +490,9 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } catch (err) {
       alert("Failed to connect to server: " + err.message);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = submitLabel;
     }
   });
 
@@ -581,7 +610,7 @@ document.addEventListener("DOMContentLoaded", () => {
     pendingDeleteJobId = null;
     if (btnConfirmDeleteAction) {
       btnConfirmDeleteAction.disabled = false;
-      btnConfirmDeleteAction.innerHTML = '<i class="fa-solid fa-trash"></i> Delete Permanently';
+      btnConfirmDeleteAction.innerHTML = "Delete permanently";
     }
   }
 
@@ -594,7 +623,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const jobId = pendingDeleteJobId;
 
       btnConfirmDeleteAction.disabled = true;
-      btnConfirmDeleteAction.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Deleting...';
+      btnConfirmDeleteAction.innerHTML = `${orbHtml("breathing")}Deleting…`;
 
       // 1. Immediately terminate SSE log stream to release file locks on Windows
       if (currentJobId === jobId && logEventSource) {
@@ -631,12 +660,12 @@ document.addEventListener("DOMContentLoaded", () => {
           await fetchOverviewStats();
         } else {
           btnConfirmDeleteAction.disabled = false;
-          btnConfirmDeleteAction.innerHTML = '<i class="fa-solid fa-trash"></i> Delete Permanently';
+          btnConfirmDeleteAction.innerHTML = "Delete permanently";
           showToast("Failed to delete: " + (data.detail || "Server error"), "error");
         }
       } catch (err) {
         btnConfirmDeleteAction.disabled = false;
-        btnConfirmDeleteAction.innerHTML = '<i class="fa-solid fa-trash"></i> Delete Permanently';
+        btnConfirmDeleteAction.innerHTML = "Delete permanently";
         showToast("Network error deleting job: " + err.message, "error");
       }
     });
@@ -698,7 +727,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const original = btnCheckUpdate.innerHTML;
     let installing = false;
     btnCheckUpdate.disabled = true;
-    btnCheckUpdate.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Checking...';
+    btnCheckUpdate.innerHTML = `${orbHtml("searching")}Checking…`;
     try {
       const res = await fetch("/api/update/check");
       const data = await res.json();
@@ -712,7 +741,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (!confirm(`${question}\n\nDownload and install it now? The dashboard will restart.`)) return;
 
-      btnCheckUpdate.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Installing...';
+      btnCheckUpdate.innerHTML = `${orbHtml("shaping")}Installing…`;
       const install = await fetch("/api/update/install", { method: "POST" });
       const result = await install.json();
       if (!install.ok) return showToast("Update failed: " + (result.detail || "Server error"), "error");
@@ -741,8 +770,7 @@ document.addEventListener("DOMContentLoaded", () => {
       fetch(`/api/jobs/${currentJobId}`)
         .then((res) => res.json())
         .then((data) => {
-          currentJobStatus.textContent = data.status.toUpperCase();
-          currentJobStatus.className = `job-status-pill status-badge ${data.status.toLowerCase()}`;
+          renderCurrentStatus(data.status);
           jobStatPages.textContent = data.pages_saved || 0;
           jobStatWords.textContent = (data.total_words || 0).toLocaleString();
           jobStatLinks.textContent = (data.total_links || 0).toLocaleString();
