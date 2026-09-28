@@ -698,6 +698,12 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
         "content_hash",
         "duplicate_of",
         "near_duplicate_of",
+        "requested_url",
+        "final_url",
+        "redirect_chain",
+        "response_bytes",
+        "response_sha256",
+        "rendered",
         "text",
     ]
     writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
@@ -707,6 +713,8 @@ def export_job_results(job_id: str, format: str = Query(default="csv")):
         row = dict(item)
         if isinstance(row.get("headings"), list):
             row["headings"] = " | ".join(row["headings"])
+        if isinstance(row.get("redirect_chain"), list):
+            row["redirect_chain"] = " -> ".join(row["redirect_chain"])
         writer.writerow({key: csv_cell(value) for key, value in row.items()})
 
     return Response(

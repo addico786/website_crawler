@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -255,6 +256,9 @@ class SiteSpider(scrapy.Spider):
 
     def item(self, response, found_on, **fields):
         self.rows += 1
+        # What the server sent, to tell apart pages that only look alike from one page sent for many
+        # addresses. A rendered page's body is the HTML the browser ended up with.
+        redirects = response.request.meta.get("redirect_urls", []) if response.request else []
         return {
             "url": response.url,
             "status": response.status,
@@ -271,6 +275,12 @@ class SiteSpider(scrapy.Spider):
             "duplicate_of": None,
             "near_duplicate_of": None,
             **fields,
+            "requested_url": redirects[0] if redirects else (response.request.url if response.request else response.url),
+            "final_url": response.url,
+            "redirect_chain": list(redirects),
+            "response_bytes": len(response.body),
+            "response_sha256": hashlib.sha256(response.body).hexdigest(),
+            "rendered": bool(response.request and response.request.meta.get("playwright")),
             "found_on": found_on,
             "crawled_at": datetime.now(timezone.utc).isoformat(),
         }
