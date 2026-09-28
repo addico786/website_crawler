@@ -15,6 +15,7 @@ from w3lib.url import canonicalize_url
 
 from polite_crawler.fingerprints import NearDuplicates, content_hash, simhash
 from polite_crawler.maintext import main_text
+from polite_crawler.traps import TrapGuard
 
 # Files, not pages. Scrapy's list plus a few it misses.
 DENY_EXTENSIONS = sorted(set(IGNORED_EXTENSIONS) | {"avif", "gz", "json", "woff", "woff2"})
@@ -102,6 +103,7 @@ class SiteSpider(scrapy.Spider):
                         self.remember_text(row)
         # Keys of pages saved or already requested: a link to one of them is not requested again.
         self.seen_keys = set(self.saved_urls)
+        self.traps = TrapGuard()
         self.link_extractor = LinkExtractor(deny_extensions=DENY_EXTENSIONS, process_value=clean_url, unique=True)
 
     def remember_text(self, row):
@@ -131,11 +133,12 @@ class SiteSpider(scrapy.Spider):
         return scrapy.Request(url, callback=callback or self.parse, meta=meta, dont_filter=dont_filter)
 
     def follow(self, url):
-        """Request a page unless a URL with the same key was already requested or saved."""
+        """Request a page unless a URL with the same key was already requested or saved, or it is a trap."""
         key = page_key(url)
         if key not in self.seen_keys:
             self.seen_keys.add(key)
-            yield self.request(url)
+            if self.traps.allow(url):
+                yield self.request(url)
 
     async def start(self):
         seed = self.start_urls[0]

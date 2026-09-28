@@ -45,6 +45,7 @@ class JobOutputPipeline:
             for key, value in stats.items()
             if key.startswith("downloader/response_status_count/")
         }
+        traps = getattr(spider, "traps", None)
         summary = {
             "seed_url": spider.start_urls[0],
             "allowed_hosts": spider.allowed_domains,
@@ -55,6 +56,9 @@ class JobOutputPipeline:
             "requests_sent": stats.get("downloader/request_count", 0),
             "responses_by_status": status_counts,
             "request_errors": stats.get("downloader/exception_count", 0),
+            # Trap URLs not requested, by rule, and large URL families worth a look.
+            "skipped": dict(traps.skipped) if traps else {},
+            "suspected_traps": traps.suspected() if traps else [],
             "results_file": "results.jsonl",
         }
         (self.job_dir / "summary.json").write_text(
