@@ -25,20 +25,50 @@
 import { MODE_FRAMES, paintFrame, resolvePreset, STATE_TO_MODE } from "./vendor/thinking-orbs/engine.es.js";
 
 const SIZES = [20, 32, 64]; // the engine's tuned presets
+// Solid ink: every dot is drawn in the text colour (black on the light Slush
+// paper, white on dark) and depth is shown by opacity alone, from 1 for the
+// nearest dots down to INK_FLOOR for the farthest. The engine's own painter
+// fades far dots toward the paper colour, which reads as pale grey here.
+const INK_FLOOR = 0.3;
 const DPR_CAP = 2; // same cap as the React component
 
-/** Job status (from /api/jobs) -> orb state, or "" for no orb.
+/** Job status (from /api/jobs) -> orb state per size, or no orb.
  *  The engine has no "done" or "error" animation, so finished, stopped and
- *  failed jobs show their status sticker and word without an orb. */
-export const JOB_STATUS_ORB = { running: "searching" }; // a dotted globe with a scan sweep
+ *  failed jobs show their status sticker and word without an orb.
+ *  Card (24 px): "solving", a dotted globe whose bands turn in quarter turns;
+ *  it stays black and visibly moving at small sizes, where "searching" dims
+ *  most of its dots to grey. Detail (96 px): "searching", a dotted globe with
+ *  a scan sweep, which reads as an ordered sphere at that size ("solving"
+ *  looks like scattered dots mid-turn). Both are dotted globes. */
+export const JOB_STATUS_ORB = { running: { card: "solving", detail: "searching" } };
 
 const reducedMq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 const darkMq = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
 const isReduced = () => !!(reducedMq && reducedMq.matches);
 
-function snapSize(size) {
-  const n = Number(size) || 20;
-  return SIZES.reduce((best, s) => (Math.abs(s - n) < Math.abs(best - n) ? s : best), SIZES[0]);
+/** The tuned preset to draw with: the largest one that fits the display size
+ *  (20 for anything smaller). Larger sizes, such as 96, scale the 64 preset. */
+function presetFor(size) {
+  return SIZES.filter((s) => s <= size).pop() || SIZES[0];
+}
+
+function paintInk(ctx, frame, dark, floor = INK_FLOOR, dotScale = 1) {
+  const rgb = dark ? "255,255,255" : "0,0,0";
+  const style = (white, a = 1) => `rgba(${rgb},${(a * (1 - (1 - floor) * Math.min(1, Math.max(0, white)))).toFixed(3)})`;
+  for (const l of frame.lines) {
+    ctx.strokeStyle = style(l.white, l.a);
+    ctx.lineWidth = l.w;
+    ctx.beginPath();
+    ctx.moveTo(l.x1, l.y1);
+    ctx.lineTo(l.x2, l.y2);
+    ctx.stroke();
+  }
+  for (const d of frame.dots) {
+    ctx.fillStyle = style(d.white, d.a);
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, d.r * dotScale, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function validState(state) {
@@ -62,14 +92,20 @@ function resolveDark(el) {
 /**
  * Mount an orb inside `el`.
  * @param {HTMLElement} el   host element (the canvas is appended to it)
- * @param {{state?: string, size?: number}} options
+ * @param {{state?: string, size?: number, ink?: "solid"|"engine"}} options
  *        state: one of the engine's states (working, searching, solving,
  *        listening, connecting, weaving, composing, breathing, shaping);
- *        an empty/unknown state hides the orb. size: 20, 32 or 64 CSS px.
+ *        an empty/unknown state hides the orb. size: CSS px; 20, 32 and 64
+ *        are the engine's tuned presets, other sizes scale the nearest one
+ *        below. ink: "solid" (default, text-coloured dots) or "engine" (the
+ *        package's grey depth ramp).
  * @returns {{setState(state: string): void, destroy(): void}}
  */
-export function mountOrb(el, { state = "working", size = 20 } = {}) {
-  const px = snapSize(size);
+export function mountOrb(el, { state = "working", size = 20, ink = "solid" } = {}) {
+  const px = Math.max(12, Math.round(Number(size) || 20)); // display size
+  const preset = presetFor(px); // geometry size
+  const zoom = px / preset;
+  const small = px <= 32;
   const canvas = document.createElement("canvas");
   canvas.setAttribute("aria-hidden", "true");
   canvas.className = "orb-canvas";
@@ -100,7 +136,11 @@ export function mountOrb(el, { state = "working", size = 20 } = {}) {
     if (!ctx || !frameFn) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, px, px);
-    paintFrame(ctx, frameFn(px, tSec, opts), dark);
+    ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0);
+    const frame = frameFn(preset, tSec, opts);
+    if (ink === "engine") paintFrame(ctx, frame, dark);
+    else if (small) paintInk(ctx, frame, dark, 0.6, 1.3); // bolder at card size so it reads at a glance
+    else paintInk(ctx, frame, dark);
   };
 
   const loop = () => {
@@ -131,7 +171,7 @@ export function mountOrb(el, { state = "working", size = 20 } = {}) {
     if (s === current) return sync();
     current = s;
     if (s) {
-      const resolved = resolvePreset(s, px);
+      const resolved = resolvePreset(s, preset);
       frameFn = MODE_FRAMES[resolved.mode];
       opts = resolved.opts;
       speed = resolved.speed;
@@ -191,7 +231,11 @@ function mountHost(host) {
   const state = host.getAttribute("data-orb") || "";
   const existing = mounted.get(host);
   if (existing) return existing.setState(state);
-  mounted.set(host, mountOrb(host, { state, size: host.getAttribute("data-orb-size") || 20 }));
+  mounted.set(host, mountOrb(host, {
+    state,
+    size: host.getAttribute("data-orb-size") || 20,
+    ink: host.getAttribute("data-orb-ink") || "solid",
+  }));
 }
 
 function scan(root) {

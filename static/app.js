@@ -193,7 +193,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const dateStr = new Date(job.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         
         const jsBadge = job.render_js ? `<span class="badge-js" title="JavaScript rendering enabled">JS</span>` : "";
-        const orb = statusClass === "running" ? orbHtml("searching") : "";
+        const orb = statusClass === "running" ? orbHtml("solving", 24) : "";
         return `
         <div class="job-item ${isActive}" data-job-id="${esc(job.job_id)}">
           <div class="job-item-actions">
