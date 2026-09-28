@@ -1,13 +1,18 @@
 """Sites that answer every address with the same page and draw the real one in the browser
 (textifydigitals.com: nginx sends the pre-rendered home page for any path, React redraws it)."""
+import hashlib
 import json
+import pickle
 import time
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
 import pytest
+from scrapy.http import HtmlResponse, Request
+from scrapy.utils.request import request_from_dict
 
 from conftest import serve
+from polite_crawler.spiders.site import SiteSpider, settle
 
 PAGES = {
     "/": ("Lantern Studio", (
@@ -35,6 +40,13 @@ PAGES = {
         "rolls over to the next month. A sandbox number lets you test without paying for real messages."
     )),
 }
+# Listed only in the sitemap, which the crawl reads before the start page decides it must render.
+UNLINKED = {"/about-us": ("About Us", (
+    "Four of us started the studio after years of fixing booking problems for friends who run small "
+    "shops. We work from a shared office above a bakery, meet every client in person at least once, and "
+    "publish our prices on the website. Most of our customers found us through another customer, which "
+    "is the only kind of marketing we have ever paid for, in coffee and cake."
+))}
 LINKS = " ".join(f'<a href="{path}">{title}</a>' for path, (title, _) in PAGES.items())
 # The same bytes for every path: the home page, then a script that draws the page for
 # location.pathname about 300 ms after load, as a client-side router does.
@@ -42,7 +54,7 @@ SHELL = f"""<!DOCTYPE html>
 <html><head><title>Lantern Studio</title><link rel="canonical" href="/"></head>
 <body><nav>{LINKS}</nav><main id="app"><h1>Lantern Studio</h1><p>{PAGES["/"][1]}</p></main>
 <script>
-const pages = {json.dumps(PAGES)};
+const pages = {json.dumps(PAGES | UNLINKED)};
 setTimeout(() => {{
   const [title, text] = pages[location.pathname] || ["Not found", "There is no page at this address."];
   document.title = title + " | Lantern Studio";
@@ -52,15 +64,26 @@ setTimeout(() => {{
 
 
 class SinglePageApp(BaseHTTPRequestHandler):
-    """Answers every path with SHELL and status 200; remembers which paths were asked for."""
+    """Answers every path but /sitemap.xml with SHELL and status 200; remembers which paths were asked for.
+    home_delay: seconds to wait before answering /."""
     requested = []
+    home_delay = 0
 
     def do_GET(self):
-        self.requested.append(urlparse(self.path).path)
+        path = urlparse(self.path).path
+        self.requested.append(path)
+        if path == "/":
+            time.sleep(self.home_delay)
+        body, kind = SHELL, "text/html; charset=utf-8"
+        if path == "/sitemap.xml":
+            base = f"http://127.0.0.1:{self.server.server_port}"
+            locs = "".join(f"<url><loc>{base}{page}</loc></url>" for page in [*PAGES, *UNLINKED])
+            body = f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</urlset>'.encode()
+            kind = "application/xml"
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", kind)
         self.end_headers()
-        self.wfile.write(SHELL)
+        self.wfile.write(body)
 
     def log_message(self, format, *args):
         pass
@@ -92,11 +115,101 @@ def test_rendering_waits_for_the_page_drawn_in_the_browser(spa_site, crawl):
         assert rows[path]["duplicate_of"] is None
 
 
-def test_without_rendering_every_address_gives_the_home_page(spa_site, crawl, tmp_path):
-    rows = by_path(crawl(seed(spa_site), "--no-sitemap"))
+def summary(job):
+    return json.loads((job / "summary.json").read_text(encoding="utf-8"))
+
+
+def check_requests(site):
+    return [path for path in site.requested if path.startswith("/__websitecrawler_check_")]
+
+
+def test_without_a_browser_every_address_gives_the_home_page(spa_site, crawl, tmp_path):
+    # No Chromium: the switch to rendering fails, and the crawl goes on without it and says so.
+    rows = by_path(crawl(seed(spa_site), "--no-sitemap", env={"PLAYWRIGHT_BROWSERS_PATH": str(tmp_path / "no-browser")}))
     assert sorted(rows) == sorted(PAGES)
     assert {row["title"] for row in rows.values()} == {"Lantern Studio"}
     assert all(row["duplicate_of"] == seed(spa_site) for path, row in rows.items() if path != "/")
+    assert {row["response_sha256"] for row in rows.values()} == {summary(tmp_path / "job")["same_page_check"]["response_sha256"]}
+    assert all(row["suspicious"] == "SAME_RESPONSE" and row["rendered"] is False for row in rows.values())
+    result = summary(tmp_path / "job")
+    assert result["site_notes"][0] == "same_page_for_every_address"
+    assert result["render_js"] is False and result["render_js_switched"] is False
+    log = (tmp_path / "job" / "job.log").read_text(encoding="utf-8")
+    assert "This site answers every address with the same page (a single-page app)." in log
+    assert "Render JavaScript is not available; pages will look the same. Install it from the dashboard." in log
+
+
+def test_the_crawl_switches_to_rendering_and_a_resume_keeps_it(spa_site, crawl, tmp_path):
+    job = tmp_path / "job"
+    # A slow start page: the sitemap's pages are found before it arrives, and must wait for it.
+    spa_site.RequestHandlerClass.home_delay = 4
+    rows = by_path(crawl(seed(spa_site), "--max-pages", "5", "--concurrency", "4"))
+    # Every page, rendered, the sitemap's too: the made-up address is not a row and does not count toward the cap.
+    assert sorted(rows) == sorted(PAGES | UNLINKED)
+    for path, (title, _) in (PAGES | UNLINKED).items():
+        assert rows[path]["title"] == f"{title} | Lantern Studio" and rows[path]["rendered"] is True
+        assert rows[path]["duplicate_of"] is None and rows[path]["suspicious"] is None
+    assert len({row["response_sha256"] for row in rows.values()}) == 5
+    first = summary(job)
+    assert first["same_page_check"]["status"] == 200 and first["site_notes"][0] == "same_page_for_every_address"
+    assert first["render_js"] is True and first["render_js_switched"] is True
+    log = (job / "job.log").read_text(encoding="utf-8")
+    assert "Switched to Render JavaScript." in log and "not available" not in log
+    assert len(check_requests(spa_site)) == 1
+
+    # Resumed without --render-js: no second check and no second switch, still rendering, nothing saved twice.
+    spa_site.RequestHandlerClass.home_delay = 0
+    assert len(crawl(seed(spa_site), "--max-pages", "5")) == 5
+    resumed = (job / "job.log").read_text(encoding="utf-8").rsplit("Scrapy 2.", 1)[1]
+    assert "made-up address" not in resumed and "Switched" not in resumed
+    assert len(check_requests(spa_site)) == 1
+    assert summary(job)["same_page_check"] == first["same_page_check"] and summary(job)["render_js"] is True
+
+
+def test_a_resumed_job_keeps_the_rendering_decision(tmp_path):
+    check = {"url": "https://example.com/__websitecrawler_check_0", "final_url": "https://example.com/__websitecrawler_check_0",
+             "status": 200, "response_sha256": "ab" * 32}
+    (tmp_path / "summary.json").write_text(json.dumps({"same_page_check": check, "site_notes": [
+        "same_page_for_every_address", "canonical_to_home"], "render_js_switched": True}), encoding="utf-8")
+    spider = SiteSpider(start_url="https://example.com", job_dir=str(tmp_path))
+    assert spider.render_js and spider.request("https://example.com/terms").meta["playwright"]
+    assert spider.site_check == check and spider.fallback_sha256() == "ab" * 32
+    assert spider.site_notes == ["same_page_for_every_address"]  # the end of the crawl works out the others again
+    # An earlier switch that failed (no browser) was written back as not switched: crawl without rendering.
+    (tmp_path / "summary.json").write_text(json.dumps({"same_page_check": check, "render_js_switched": False}), encoding="utf-8")
+    assert not SiteSpider(start_url="https://example.com", job_dir=str(tmp_path)).render_js
+
+
+def test_resumable_requests_can_be_written_to_disk(tmp_path):
+    # JOBDIR keeps pending requests on disk; the rendered start page must pickle, errback and page methods included.
+    spider = SiteSpider(start_url="http://127.0.0.1:9/", job_dir=str(tmp_path), render_js="True")
+    request = spider.seed_request()
+    restored = request_from_dict(pickle.loads(pickle.dumps(request.to_dict(spider=spider), protocol=4)), spider=spider)
+    assert restored.errback == spider.seed_failed and restored.callback == spider.parse
+    assert restored.meta["seed"] and restored.meta["playwright_page_methods"][0].method is settle
+
+
+def test_same_response_is_only_flagged_for_pages_that_should_differ(tmp_path):
+    spider = SiteSpider(start_url="https://example.com", job_dir=str(tmp_path))
+    spider.site_check = {"url": "https://example.com/__websitecrawler_check_0", "final_url": "https://example.com/__websitecrawler_check_0",
+                         "status": 404, "response_sha256": hashlib.sha256(b"Not found").hexdigest()}
+
+    def row(path, body, status=200):
+        url = f"https://example.com{path}"
+        return spider.item(HtmlResponse(url, status=status, body=body, request=Request(url)), "")
+
+    # A normal site: its 404 page for the made-up address, and for two broken links, is not suspicious.
+    assert row("/", b"<p>Home</p>")["suspicious"] is None
+    assert row("/gone", b"Not found", 404)["suspicious"] is None and row("/lost", b"Not found", 404)["suspicious"] is None
+    assert row("/index.html", b"<p>Home</p>")["suspicious"] is None  # the same page, by its key
+    assert row("/about", b"<p>Home</p>")["suspicious"] == "SAME_RESPONSE"  # another page, the same bytes
+    # A site that sends 200 and one page for an address that cannot exist.
+    spider.site_check |= {"status": 200, "response_sha256": hashlib.sha256(b"<p>App</p>").hexdigest()}
+    assert row("/terms", b"<p>App</p>")["suspicious"] == "SAME_RESPONSE"
+    # ...but not when the made-up address was sent on to another page.
+    spider.site_check |= {"final_url": "https://example.com/"}
+    assert row("/privacy", b"<p>App</p>")["suspicious"] == "SAME_RESPONSE"  # /terms already had these bytes
+    assert spider.fallback_sha256() is None
 
 
 class PollsForever(BaseHTTPRequestHandler):

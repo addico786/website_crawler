@@ -17,8 +17,13 @@ def test_fixture_site_crawl(fixture_site, crawl, tmp_path):
     note = "Questions about a plant? Our growers answer every email within one working day."
     assert note in boilerplate["blocks"] and boilerplate["pages_with_text"] == 6
     assert note in by_path["/guides/planting.html"]["text"]  # results.jsonl keeps the full text
+    # A normal site answers the made-up address with 404: nothing flagged, no switch to rendering.
+    summary = json.loads((tmp_path / "job" / "summary.json").read_text(encoding="utf-8"))
+    assert summary["same_page_check"]["status"] == 404 and "/__websitecrawler_check_" in summary["same_page_check"]["url"]
+    assert summary["site_notes"] == [] and summary["render_js"] is False and summary["render_js_switched"] is False
+    assert all(row["suspicious"] is None and row["rendered"] is False for row in rows)
     # The result line and summary.json say what was marked and removed.
-    result = json.loads((tmp_path / "job" / "summary.json").read_text(encoding="utf-8"))["result"]
+    result = summary["result"]
     assert result == {"pages": 6, "duplicates": 0, "near_duplicates": 0, "boilerplate_blocks": len(boilerplate["blocks"]),
                       "trap_urls_skipped": 0}
     log = (tmp_path / "job" / "job.log").read_text(encoding="utf-8")

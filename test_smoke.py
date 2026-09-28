@@ -130,4 +130,6 @@ def test_spider_link_rules():
     sitemap = TextResponse("https://example.com/s.xml", body=b"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
       xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"><url><loc>https://example.com/b</loc>
       <image:image><image:loc>https://example.com/b.jpg</image:loc></image:image></url></urlset>""")
-    assert [r.url for r in spider.parse_sitemap(sitemap)] == ["https://example.com/b"]
+    # Sitemap pages wait for the start page, which decides whether the crawl renders.
+    assert list(spider.parse_sitemap(sitemap)) == [] and spider.waiting == ["https://example.com/b"]
+    assert [r.url for r in spider.start_page_decided()] == ["https://example.com/b"]

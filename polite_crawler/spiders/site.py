@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
@@ -18,6 +19,7 @@ from w3lib.url import canonicalize_url
 
 from polite_crawler.fingerprints import NearDuplicates, content_hash, simhash
 from polite_crawler.maintext import main_text
+from polite_crawler.pipelines import read_summary, update_summary
 from polite_crawler.traps import TrapGuard
 
 # Files, not pages. Scrapy's list plus a few it misses.
@@ -34,6 +36,8 @@ SESSION_PARAMS = ("jsessionid", "phpsessid", "sessionid")
 SESSION_ID = re.compile(r"[0-9a-f]{32}", re.I)
 DEFAULT_PORTS = {"http": 80, "https": 443}
 INDEX_FILE = re.compile(r"/index\.(?:html?|php)$", re.I)
+# summary.json site_notes: the site sends the start page's bytes for an address that cannot exist.
+SAME_PAGE = "same_page_for_every_address"
 
 
 async def settle(page):
@@ -106,6 +110,8 @@ class SiteSpider(scrapy.Spider):
         # Text fingerprints of saved pages: content_hash -> first URL, and the SimHash bands.
         self.hashes = {}
         self.near_duplicates = NearDuplicates()
+        # Bodies of saved pages: response_sha256 -> page key of the first page sent with those bytes.
+        self.responses = {}
         if results.exists():
             with results.open(encoding="utf-8") as f:
                 for line in f:
@@ -114,10 +120,22 @@ class SiteSpider(scrapy.Spider):
                         self.saved_urls.add(page_key(row["url"]))
                         self.rows += 1
                         self.remember_text(row)
+                        self.remember_response(row)
         # Keys of pages saved or already requested: a link to one of them is not requested again.
         self.seen_keys = set(self.saved_urls)
         self.traps = TrapGuard()
         self.link_extractor = LinkExtractor(deny_extensions=DENY_EXTENSIONS, process_value=clean_url, unique=True)
+        # What a made-up address returned (see check_site()) and what the crawl decided from it. Kept in
+        # summary.json, so a resumed job neither checks again nor forgets that it switched to rendering.
+        earlier = read_summary(job_dir)
+        self.site_check = earlier.get("same_page_check")
+        self.site_notes = [note for note in earlier.get("site_notes", []) if note == SAME_PAGE]
+        self.render_js_switched = bool(earlier.get("render_js_switched"))
+        self.render_js = self.render_js or self.render_js_switched
+        self.render_failed = False
+        # Sitemap pages wait until the start page has decided whether the crawl renders.
+        self.seed_done = False
+        self.waiting = []
 
     def remember_text(self, row):
         """Record a saved page's fingerprints so later copies are marked as duplicates."""
@@ -125,6 +143,39 @@ class SiteSpider(scrapy.Spider):
             self.hashes.setdefault(row["content_hash"], row["url"])
             if row.get("simhash"):
                 self.near_duplicates.add(int(row["simhash"], 16), row["url"])
+
+    def remember_response(self, row):
+        if row.get("status", 0) < 300 and row.get("response_sha256"):
+            self.responses.setdefault(row["response_sha256"], page_key(row["url"]))
+
+    def fallback_sha256(self):
+        """sha256 of the page the site sent, with 200, for the made-up address; None for a normal 404."""
+        check = self.site_check
+        if check and check.get("status") == 200 and urlsplit(check["final_url"]).path == urlsplit(check["url"]).path:
+            return check["response_sha256"]
+        return None
+
+    def same_response(self, row):
+        """SAME_RESPONSE when a page arrived with the bytes sent for the made-up address, or with
+        those of another saved page: one page sent for different addresses."""
+        sha = row.get("response_sha256")
+        if row["status"] >= 300 or not sha:
+            return None
+        if sha == self.fallback_sha256() or self.responses.get(sha, page_key(row["url"])) != page_key(row["url"]):
+            return "SAME_RESPONSE"
+        return None
+
+    def site_state(self):
+        return {
+            "same_page_check": self.site_check,
+            "site_notes": list(self.site_notes),
+            "render_js": self.render_js,
+            "render_js_switched": self.render_js_switched,
+        }
+
+    def save_site_state(self):
+        # Now, not only at the end: stopping a job from the dashboard kills the crawl.
+        update_summary(self.job_dir, self.site_state())
 
     def add_host(self, host):
         host = host.lower()
@@ -137,13 +188,16 @@ class SiteSpider(scrapy.Spider):
     def is_page_url(self, url):
         return self.in_scope(url) and not url_has_any_extension(url, ["." + ext for ext in DENY_EXTENSIONS])
 
-    def request(self, url, callback=None, dont_filter=False, **meta):
+    def request(self, url, callback=None, dont_filter=False, errback=None, **meta):
         # allow_offsite: in_scope() already decided; Scrapy's offsite filter would
         # otherwise drop hosts adopted after a seed redirect.
         meta = {"allow_offsite": True, **meta}
         if self.render_js and callback is None:
             meta |= {"playwright": True, "playwright_include_page": False, "playwright_page_methods": [PageMethod(settle)]}
-        return scrapy.Request(url, callback=callback or self.parse, meta=meta, dont_filter=dont_filter)
+        return scrapy.Request(url, callback=callback or self.parse, errback=errback, meta=meta, dont_filter=dont_filter)
+
+    def seed_request(self):
+        return self.request(self.start_urls[0], dont_filter=True, errback=self.seed_failed, seed=True)
 
     def follow(self, url):
         """Request a page unless a URL with the same key was already requested or saved, or it is a trap."""
@@ -153,10 +207,34 @@ class SiteSpider(scrapy.Spider):
             if self.traps.allow(url):
                 yield self.request(url)
 
+    async def check_site(self, seed):
+        """Ask for an address that cannot exist, before any page. A normal site answers 404. A site
+        that answers 200 with the start page's bytes sends one page for every address (see parse()).
+        Downloaded directly, not scheduled: no row, no page count, no links, never a broken link."""
+        parts = urlsplit(seed)
+        url = f"{parts.scheme}://{parts.netloc}/__websitecrawler_check_{secrets.token_hex(4)}"
+        request = scrapy.Request(url, dont_filter=True, meta={"allow_offsite": True})
+        try:
+            response = await self.crawler.engine.download_async(request)
+        except Exception as error:  # unreachable, or robots.txt disallows it: crawl as before
+            self.logger.info("Could not check a made-up address (%s): %s", url, error)
+            return None
+        self.logger.info("A made-up address (%s) answered %s.", url, response.status)
+        return {
+            "url": url,
+            "status": response.status,
+            "final_url": response.url,
+            "response_sha256": hashlib.sha256(response.body).hexdigest(),
+        }
+
     async def start(self):
         seed = self.start_urls[0]
         self.seen_keys.add(page_key(seed))
-        yield self.request(seed, dont_filter=True, seed=True)
+        if self.site_check is None:
+            self.site_check = await self.check_site(seed)
+            if self.site_check:
+                self.save_site_state()
+        yield self.seed_request()
         if self.use_sitemap:
             parsed = urlparse(seed)
             yield self.request(f"{parsed.scheme}://{parsed.netloc}/robots.txt", callback=self.parse_robots, dont_filter=True)
@@ -184,7 +262,46 @@ class SiteSpider(scrapy.Spider):
                 if self.in_scope(url):
                     yield self.request(url, callback=self.parse_sitemap)
             elif self.is_page_url(url):
-                yield from self.follow(url)
+                if self.seed_done:
+                    yield from self.follow(url)
+                else:  # a plain request now would miss a switch to rendering
+                    self.waiting.append(url)
+
+    def start_page_decided(self):
+        """The start page is in, rendered or not: request the sitemap pages that waited for it."""
+        self.seed_done = True
+        waiting, self.waiting = self.waiting, []
+        for url in waiting:
+            yield from self.follow(url)
+
+    def seed_failed(self, failure):
+        if failure.request.meta.get("playwright") and self.render_js_switched:
+            # Chromium is missing or crashed: crawl without it, as before the switch.
+            self.render_js = self.render_js_switched = False
+            self.render_failed = True
+            self.logger.warning("Render JavaScript is not available; pages will look the same. Install it from the dashboard.")
+            self.logger.info("Rendering the start page failed: %s", failure.value)
+            self.save_site_state()
+            self.crawler.engine.crawl(self.seed_request())
+            return
+        self.logger.error("Could not download the start page %s: %s", failure.request.url, failure.value)
+        yield from self.start_page_decided()
+
+    def switch_to_rendering(self, response):
+        """True when the start page came back as the made-up address's page and the crawl now renders.
+        Its HTML is then the same for every address; only a browser shows the real pages."""
+        if response.meta.get("playwright") or response.status != 200:
+            return False
+        if self.fallback_sha256() != hashlib.sha256(response.body).hexdigest():
+            return False
+        if SAME_PAGE not in self.site_notes:
+            self.site_notes.append(SAME_PAGE)
+            self.logger.warning("This site answers every address with the same page (a single-page app).")
+        if not self.render_failed:  # this run already found that rendering does not work
+            self.render_js = self.render_js_switched = True
+            self.logger.info("Switched to Render JavaScript.")
+        self.save_site_state()
+        return self.render_js_switched
 
     def at_cap(self):
         return bool(self.max_pages) and self.rows >= self.max_pages
@@ -192,10 +309,16 @@ class SiteSpider(scrapy.Spider):
     def parse(self, response):
         if self.at_cap():  # a response still in flight, or a resumed job already at its cap
             raise CloseSpider("page_cap")
-        if response.meta.get("seed") and not self.in_scope(response.url):
-            # e.g. example.com -> example.co.uk: crawl where the site actually lives.
-            self.logger.info("Start URL redirected to %s; crawling that site instead.", response.url)
-            self.add_host(urlparse(response.url).hostname)
+        if response.meta.get("seed"):
+            if not self.in_scope(response.url):
+                # e.g. example.com -> example.co.uk: crawl where the site actually lives.
+                self.logger.info("Start URL redirected to %s; crawling that site instead.", response.url)
+                self.add_host(urlparse(response.url).hostname)
+            if self.switch_to_rendering(response):
+                # Not yielded: a request from this callback would count one level deeper.
+                self.crawler.engine.crawl(self.seed_request())
+                return
+            yield from self.start_page_decided()
         key = page_key(response.url)
         if key in self.saved_urls or not self.in_scope(response.url):
             return
@@ -259,7 +382,7 @@ class SiteSpider(scrapy.Spider):
         # What the server sent, to tell apart pages that only look alike from one page sent for many
         # addresses. A rendered page's body is the HTML the browser ended up with.
         redirects = response.request.meta.get("redirect_urls", []) if response.request else []
-        return {
+        row = {
             "url": response.url,
             "status": response.status,
             "title": "",
@@ -274,6 +397,7 @@ class SiteSpider(scrapy.Spider):
             "simhash": None,
             "duplicate_of": None,
             "near_duplicate_of": None,
+            "suspicious": None,
             **fields,
             "requested_url": redirects[0] if redirects else (response.request.url if response.request else response.url),
             "final_url": response.url,
@@ -284,3 +408,6 @@ class SiteSpider(scrapy.Spider):
             "found_on": found_on,
             "crawled_at": datetime.now(timezone.utc).isoformat(),
         }
+        row["suspicious"] = self.same_response(row)
+        self.remember_response(row)
+        return row

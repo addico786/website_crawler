@@ -41,10 +41,11 @@ def find_boilerplate(texts):
     return sorted(block for block, count in counts.items() if count >= needed), pages
 
 
-def write_boilerplate(job_dir, blocks, pages):
-    path = Path(job_dir) / FILE_NAME
-    temp = path.with_name(FILE_NAME + ".tmp")
-    temp.write_text(json.dumps({"pages_with_text": pages, "blocks": blocks}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def write_json(path, data):
+    """Write a job file in one step, so the dashboard never reads half of it."""
+    path = Path(path)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     for _ in range(20):
         try:
             os.replace(temp, path)
@@ -52,6 +53,10 @@ def write_boilerplate(job_dir, blocks, pages):
         except PermissionError:  # Windows: the dashboard is reading the old file right now
             time.sleep(0.25)
     os.replace(temp, path)
+
+
+def write_boilerplate(job_dir, blocks, pages):
+    write_json(Path(job_dir) / FILE_NAME, {"pages_with_text": pages, "blocks": blocks})
 
 
 def load_boilerplate(job_dir):

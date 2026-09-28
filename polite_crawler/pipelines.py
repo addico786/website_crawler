@@ -7,7 +7,7 @@ from pathlib import Path
 from scrapy import signals
 from scrapy.exceptions import DropItem
 
-from polite_crawler.textblocks import find_boilerplate, write_boilerplate
+from polite_crawler.textblocks import find_boilerplate, write_boilerplate, write_json
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,20 @@ def read_rows(path):
                 except ValueError:
                     continue
     return rows
+
+
+def read_summary(job_dir):
+    """The job's summary.json (from an earlier run, or this one so far); {} when there is none."""
+    try:
+        summary = json.loads((Path(job_dir) / "summary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def update_summary(job_dir, fields):
+    """Set some fields of summary.json now, keeping the rest."""
+    write_json(Path(job_dir) / "summary.json", {**read_summary(job_dir), **fields})
 
 
 class JobOutputPipeline:
@@ -96,8 +110,8 @@ class JobOutputPipeline:
             # Trap URLs not requested, by rule, and large URL families worth a look.
             "skipped": dict(traps.skipped) if traps else {},
             "suspected_traps": traps.suspected() if traps else [],
+            # The made-up address checked first, what it says about the site, and whether pages were rendered.
+            **(spider.site_state() if hasattr(spider, "site_state") else {}),
             "results_file": "results.jsonl",
         }
-        (self.job_dir / "summary.json").write_text(
-            json.dumps(summary, indent=2) + "\n", encoding="utf-8"
-        )
+        write_json(self.job_dir / "summary.json", summary)
