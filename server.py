@@ -801,6 +801,12 @@ def install_update():
 
 
 # Mount Static Dashboard Frontend
+# The Windows registry can map .js to text/plain, and browsers refuse to run
+# ES modules (static/orbs.js) served that way; pin the types we ship.
+import mimetypes  # noqa: E402
+
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("font/woff2", ".woff2")
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 
